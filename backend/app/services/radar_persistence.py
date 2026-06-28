@@ -85,8 +85,12 @@ def radar_scan_record_asdict(scan: RadarScanRecord) -> dict[str, Any]:
     }
 
 
-def radar_candidate_record_asdict(candidate: RadarCandidateRecord) -> dict[str, Any]:
-    return {
+def radar_candidate_record_asdict(
+    candidate: RadarCandidateRecord,
+    *,
+    include_details: bool = False,
+) -> dict[str, Any]:
+    data = {
         "scan_id": candidate.scan_id,
         "symbol": candidate.symbol,
         "base_asset": candidate.base_asset,
@@ -105,10 +109,16 @@ def radar_candidate_record_asdict(candidate: RadarCandidateRecord) -> dict[str, 
         "fake_breakout_risk": candidate.fake_breakout_risk,
         "ai_candidate": candidate.ai_candidate,
         "market_structure": candidate.market_structure_json,
-        "score_features": candidate.score_features_json,
-        "score_explain": candidate.score_explain_json,
-        "raw": candidate.raw_json,
     }
+    if include_details:
+        data.update(
+            {
+                "score_features": candidate.score_features_json,
+                "score_explain": candidate.score_explain_json,
+                "raw": candidate.raw_json,
+            }
+        )
+    return data
 
 
 def _candidate_from_row(scan_id: str, row: dict[str, Any]) -> RadarCandidateRecord:

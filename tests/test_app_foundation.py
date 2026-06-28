@@ -77,6 +77,35 @@ def test_v2_task_status_route_returns_404_for_missing_task():
     assert response.json()["detail"] == "task_not_found"
 
 
+def test_v2_task_status_route_reads_persisted_task_from_shared_database(tmp_path):
+    db_path = tmp_path / "app.db"
+    engine = build_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+
+    worker_a = TaskRegistry(session_factory=SessionLocal)
+    task = worker_a.create(kind="radar_scan", metadata={"force_refresh": True})
+    worker_a.mark_running(task.task_id)
+
+    worker_b = TaskRegistry(session_factory=SessionLocal)
+    client = TestClient(
+        create_app(
+            task_registry=worker_b,
+            session_factory=SessionLocal,
+            initialize_database=False,
+        )
+    )
+
+    response = client.get(f"/api/v2/tasks/{task.task_id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["task_id"] == task.task_id
+    assert data["kind"] == "radar_scan"
+    assert data["state"] == "running"
+    assert data["metadata"] == {"force_refresh": True}
+
+
 def test_v2_ai_status_route_uses_unified_service(monkeypatch):
     class FakeAIService:
         def status(self, **kwargs):
@@ -180,6 +209,9 @@ def test_v2_latest_radar_scan_route_returns_persisted_scan(tmp_path):
                 rank=1,
                 score=77.5,
                 direction="SHORT",
+                score_features_json={"volume_score": 80},
+                score_explain_json={"score_model": "test"},
+                raw_json={"symbol": "ETHUSDT", "score": 77.5},
             )
         )
 

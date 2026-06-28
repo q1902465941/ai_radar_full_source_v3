@@ -25,6 +25,14 @@ def _datetime_from_ms(value: int | None) -> datetime | None:
     return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
 
 
+def _datetime_to_ms(value: datetime | None) -> int | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return int(value.timestamp() * 1000)
+
+
 class TaskState(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
@@ -80,6 +88,12 @@ class TaskRegistry:
         return task
 
     def get(self, task_id: str) -> TaskRecord | None:
+        if self._session_factory is not None:
+            task = self._load_task(task_id)
+            if task is not None:
+                with self._lock:
+                    self._tasks[task.task_id] = task
+                return task
         with self._lock:
             return self._tasks.get(task_id)
 
@@ -144,6 +158,29 @@ class TaskRegistry:
             row.result_json = _json_dict(task.result) if task.result is not None else None
             row.updated_at = _datetime_from_ms(task.updated_at_ms) or datetime.now(timezone.utc)
             row.completed_at = _datetime_from_ms(task.completed_at_ms)
+
+    def _load_task(self, task_id: str) -> TaskRecord | None:
+        if self._session_factory is None:
+            return None
+        with session_scope(self._session_factory) as session:
+            row = session.execute(
+                select(BackgroundTaskRecord).where(BackgroundTaskRecord.task_id == task_id)
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            created_at_ms = _datetime_to_ms(row.created_at)
+            updated_at_ms = _datetime_to_ms(row.updated_at)
+            return TaskRecord(
+                task_id=row.task_id,
+                kind=row.kind,
+                state=TaskState(row.state),
+                created_at_ms=created_at_ms or _now_ms(),
+                updated_at_ms=updated_at_ms or created_at_ms or _now_ms(),
+                completed_at_ms=_datetime_to_ms(row.completed_at),
+                metadata=_json_dict(row.payload_json),
+                result=_json_dict(row.result_json) if row.result_json is not None else None,
+                error=row.error or "",
+            )
 
 
 def _json_dict(value: dict[str, Any]) -> dict[str, Any]:

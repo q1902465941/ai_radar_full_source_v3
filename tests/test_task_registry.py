@@ -69,6 +69,26 @@ def test_task_registry_persists_state_changes(tmp_path):
     assert row.completed_at is not None
 
 
+def test_task_registry_reads_persisted_task_from_another_worker(tmp_path):
+    db_path = tmp_path / "tasks.db"
+    engine = build_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+
+    worker_a = TaskRegistry(session_factory=SessionLocal)
+    task = worker_a.create(kind="radar_scan", metadata={"force_refresh": True})
+    worker_a.mark_running(task.task_id)
+
+    worker_b = TaskRegistry(session_factory=SessionLocal)
+    loaded = worker_b.get(task.task_id)
+
+    assert loaded is not None
+    assert loaded.task_id == task.task_id
+    assert loaded.kind == "radar_scan"
+    assert loaded.state == TaskState.RUNNING
+    assert loaded.metadata == {"force_refresh": True}
+
+
 def test_async_task_runner_marks_task_succeeded():
     async def scenario():
         registry = TaskRegistry()

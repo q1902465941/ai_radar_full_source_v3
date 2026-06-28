@@ -104,7 +104,7 @@ async def start_radar_scan(payload: RadarScanRequest, request: Request) -> dict[
 
 
 @router.get("/scans/latest")
-async def latest_radar_scan(request: Request) -> dict[str, object]:
+async def latest_radar_scan(request: Request, include_details: bool = False) -> dict[str, object]:
     session_factory = request.app.state.session_factory
     with session_scope(session_factory) as session:
         scan = session.execute(
@@ -122,5 +122,8 @@ async def latest_radar_scan(request: Request) -> dict[str, object]:
         return {
             "ok": True,
             "scan": radar_scan_record_asdict(scan),
-            "candidates": [radar_candidate_record_asdict(candidate) for candidate in candidates],
+            "candidates": [
+                radar_candidate_record_asdict(candidate, include_details=include_details)
+                for candidate in candidates
+            ],
         }
