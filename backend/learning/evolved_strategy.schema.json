@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "EvolvedStrategyCandidates",
+  "type": "object",
+  "required": ["strategies"],
+  "additionalProperties": false,
+  "properties": {
+    "strategies": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "required": ["name", "filters", "rationale"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string"},
+          "rationale": {"type": "string"},
+          "filters": {
+            "type": "object",
+            "required": [
+              "min_score",
+              "min_fund_confirm",
+              "allowed_fake_risks",
+              "min_direction_confirmations",
+              "min_volume_spike",
+              "max_wick_ratio",
+              "require_oi_positive",
+              "require_timeframe_alignment",
+              "require_taker_alignment",
+              "require_depth_alignment",
+              "require_sm_delta_alignment",
+              "allowed_sides"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "min_score": {"type": "number", "minimum": 0, "maximum": 100},
+              "min_fund_confirm": {"type": "integer", "minimum": 0, "maximum": 3},
+              "allowed_fake_risks": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH"]}
+              },
+              "min_direction_confirmations": {"type": "integer", "minimum": 0, "maximum": 9},
+              "min_volume_spike": {"type": "number", "minimum": 0},
+              "max_wick_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+              "require_oi_positive": {"type": "boolean"},
+              "require_timeframe_alignment": {"type": "boolean"},
+              "require_taker_alignment": {"type": "boolean"},
+              "require_depth_alignment": {"type": "boolean"},
+              "require_sm_delta_alignment": {"type": "boolean"},
+              "allowed_sides": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "enum": ["LONG", "SHORT"]}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

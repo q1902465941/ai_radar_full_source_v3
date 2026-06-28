@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StrategyPlan",
+  "type": "object",
+  "required": [
+    "action",
+    "symbol",
+    "side",
+    "entry_zone_low",
+    "entry_zone_high",
+    "ideal_entry_price",
+    "stop_loss",
+    "tp1",
+    "tp2",
+    "confidence",
+    "reason",
+    "wait_type",
+    "expire_after_seconds",
+    "upgrade_condition",
+    "strategy_contract"
+  ],
+  "properties": {
+    "action": { "type": "string", "enum": ["WAIT", "OPEN_LONG", "OPEN_SHORT"] },
+    "symbol": { "type": "string" },
+    "side": { "type": "string", "enum": ["LONG", "SHORT", "NEUTRAL"] },
+    "entry_zone_low": { "type": "number" },
+    "entry_zone_high": { "type": "number" },
+    "ideal_entry_price": { "type": "number" },
+    "stop_loss": { "type": "number" },
+    "tp1": { "type": "number" },
+    "tp2": { "type": "number" },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 100 },
+    "reason": { "type": "string" },
+    "wait_type": { "type": ["string", "null"] },
+    "expire_after_seconds": { "type": "integer", "minimum": 1 },
+    "upgrade_condition": {
+      "type": "object",
+      "required": [
+        "description",
+        "fund_confirm_min",
+        "score_min",
+        "rank_max",
+        "price_level",
+        "timeout_seconds"
+      ],
+      "properties": {
+        "description": { "type": ["string", "null"] },
+        "fund_confirm_min": { "type": ["number", "null"] },
+        "score_min": { "type": ["number", "null"] },
+        "rank_max": { "type": ["number", "null"] },
+        "price_level": { "type": ["number", "null"] },
+        "timeout_seconds": { "type": ["number", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "strategy_contract": {
+      "type": ["object", "null"],
+      "required": [
+        "version",
+        "strategy_kind",
+        "hypothesis",
+        "signal",
+        "risk",
+        "execution",
+        "position_lifecycle",
+        "hold_logic",
+        "reduce_logic",
+        "add_logic",
+        "exit_logic",
+        "time_stop",
+        "review_metrics",
+        "entry_conditions",
+        "avoid_conditions",
+        "invalidation",
+        "position_management",
+        "cost_constraints",
+        "learning_tags",
+        "allowed_stages",
+        "research_review",
+        "graduation_rule"
+      ],
+      "properties": {
+        "version": { "type": "string" },
+        "strategy_kind": { "type": "string" },
+        "hypothesis": { "type": "string" },
+        "signal": {
+          "type": "object",
+          "required": ["entry", "evidence", "not_enough_if"],
+          "properties": {
+            "entry": { "type": "string" },
+            "evidence": { "type": "array", "items": { "type": "string" } },
+            "not_enough_if": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "risk": {
+          "type": "object",
+          "required": ["max_loss", "failure_modes", "reject_if"],
+          "properties": {
+            "max_loss": { "type": "string" },
+            "failure_modes": { "type": "array", "items": { "type": "string" } },
+            "reject_if": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "execution": {
+          "type": "object",
+          "required": ["stage", "order_plan", "fill_assumption", "cost_checks", "live_permission"],
+          "properties": {
+            "stage": { "type": "string" },
+            "order_plan": { "type": "string" },
+            "fill_assumption": { "type": "string" },
+            "cost_checks": { "type": "array", "items": { "type": "string" } },
+            "live_permission": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "position_lifecycle": {
+          "type": "object",
+          "required": ["states", "initial_state_after_fill", "principle"],
+          "properties": {
+            "states": { "type": "array", "items": { "type": "string" } },
+            "initial_state_after_fill": { "type": "string" },
+            "principle": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "hold_logic": {
+          "type": "object",
+          "required": ["continue_holding_if", "do_not_exit_for", "evidence_from_scan"],
+          "properties": {
+            "continue_holding_if": { "type": "array", "items": { "type": "string" } },
+            "do_not_exit_for": { "type": "array", "items": { "type": "string" } },
+            "evidence_from_scan": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "reduce_logic": {
+          "type": "object",
+          "required": ["reduce_if", "tp1_close_ratio", "after_reduce", "never_reduce_below_core_without_exit_reason"],
+          "properties": {
+            "reduce_if": { "type": "array", "items": { "type": "string" } },
+            "tp1_close_ratio": { "type": ["number", "string"] },
+            "after_reduce": { "type": "string" },
+            "never_reduce_below_core_without_exit_reason": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "add_logic": {
+          "type": "object",
+          "required": ["add_if", "max_adds", "reason"],
+          "properties": {
+            "add_if": { "type": "array", "items": { "type": "string" } },
+            "max_adds": { "type": ["integer", "number"] },
+            "reason": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "exit_logic": {
+          "type": "object",
+          "required": ["core_exit_only_if", "minor_reverse_signal_action", "final_targets"],
+          "properties": {
+            "core_exit_only_if": { "type": "array", "items": { "type": "string" } },
+            "minor_reverse_signal_action": { "type": "string" },
+            "final_targets": {
+              "type": "object",
+              "required": ["tp1", "tp2", "stop_loss"],
+              "properties": {
+                "tp1": { "type": ["number", "string"] },
+                "tp2": { "type": ["number", "string"] },
+                "stop_loss": { "type": ["number", "string"] }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "time_stop": {
+          "type": "object",
+          "required": ["seconds", "rule", "requires_no_favorable_development"],
+          "properties": {
+            "seconds": { "type": ["integer", "number"] },
+            "rule": { "type": "string" },
+            "requires_no_favorable_development": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "review_metrics": { "type": "array", "items": { "type": "string" }, "minItems": 3 },
+        "entry_conditions": { "type": "array", "items": { "type": "string" }, "minItems": 3 },
+        "avoid_conditions": { "type": "array", "items": { "type": "string" }, "minItems": 2 },
+        "invalidation": {
+          "type": "object",
+          "required": ["hard_stop", "signal_failure", "time_failure_seconds"],
+          "properties": {
+            "hard_stop": { "type": ["number", "string"] },
+            "signal_failure": { "type": "array", "items": { "type": "string" } },
+            "time_failure_seconds": { "type": ["integer", "number"] }
+          },
+          "additionalProperties": false
+        },
+        "position_management": {
+          "type": "object",
+          "required": ["entry_zone", "tp1", "tp2", "tp1_close_ratio", "after_tp1", "max_adds"],
+          "properties": {
+            "entry_zone": { "type": "array", "items": { "type": "number" } },
+            "tp1": { "type": ["number", "string"] },
+            "tp2": { "type": ["number", "string"] },
+            "tp1_close_ratio": { "type": ["number", "string"] },
+            "after_tp1": { "type": "string" },
+            "max_adds": { "type": ["integer", "number"] }
+          },
+          "additionalProperties": false
+        },
+        "cost_constraints": {
+          "type": "object",
+          "required": ["round_trip_cost_pct", "stop_distance_pct", "min_net_profit_usdt", "min_profit_cost_ratio", "tp2_min_r"],
+          "properties": {
+            "round_trip_cost_pct": { "type": ["number", "string"] },
+            "stop_distance_pct": { "type": ["number", "string"] },
+            "min_net_profit_usdt": { "type": ["number", "string"] },
+            "min_profit_cost_ratio": { "type": ["number", "string"] },
+            "tp2_min_r": { "type": ["number", "string"] }
+          },
+          "additionalProperties": false
+        },
+        "learning_tags": {
+          "type": "object",
+          "required": [
+            "symbol",
+            "side",
+            "cyqnt_estimated_win_rate",
+            "cyqnt_feature_score",
+            "cyqnt_selection_score",
+            "main_positive_features",
+            "main_failure_risks"
+          ],
+          "properties": {
+            "symbol": { "type": "string" },
+            "side": { "type": "string" },
+            "cyqnt_estimated_win_rate": { "type": ["number", "string"] },
+            "cyqnt_feature_score": { "type": ["number", "string"] },
+            "cyqnt_selection_score": { "type": ["number", "string"] },
+            "main_positive_features": { "type": "array", "items": { "type": "string" } },
+            "main_failure_risks": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "allowed_stages": {
+          "type": "object",
+          "required": ["paper_probe", "paper_formal", "shadow_live", "live_test_order", "micro_live", "live"],
+          "properties": {
+            "paper_probe": { "type": "boolean" },
+            "paper_formal": { "type": "boolean" },
+            "shadow_live": { "type": "boolean" },
+            "live_test_order": { "type": "boolean" },
+            "micro_live": { "type": "boolean" },
+            "live": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "research_review": {
+          "type": "object",
+          "required": ["role_a_researcher", "role_b_risk_officer", "must_report", "report_template", "decision_bias"],
+          "properties": {
+            "role_a_researcher": { "type": "string" },
+            "role_b_risk_officer": { "type": "string" },
+            "must_report": { "type": "boolean" },
+            "report_template": { "type": "string" },
+            "decision_bias": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "graduation_rule": {
+          "type": "object",
+          "required": ["min_forward_trades", "min_win_rate", "min_profit_factor", "min_pnl", "rule"],
+          "properties": {
+            "min_forward_trades": { "type": ["integer", "number"] },
+            "min_win_rate": { "type": ["number", "string"] },
+            "min_profit_factor": { "type": ["number", "string"] },
+            "min_pnl": { "type": ["number", "string"] },
+            "rule": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

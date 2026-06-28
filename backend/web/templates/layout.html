@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>猎妖人 AI Radar</title>
+  <link rel="stylesheet" href="/static/app.css?v=monitor-ui-2">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">妖</div>
+        <div class="brand-copy"><b>猎妖人</b><span>AI RADAR SYSTEM</span></div>
+      </div>
+      <nav>
+        <a href="/dashboard" class="nav" data-path="/dashboard"><span class="nav-icon">01</span><span><b>概览</b><small>Overview</small></span></a>
+        <a href="/radar" class="nav" data-path="/radar"><span class="nav-icon">02</span><span><b>雷达中心</b><small>Markets</small></span></a>
+        <a href="/positions" class="nav" data-path="/positions"><span class="nav-icon">03</span><span><b>持仓</b><small>Portfolio</small></span></a>
+        <a href="/strategy-ai" class="nav" data-path="/strategy-ai"><span class="nav-icon">04</span><span><b>策略AI</b><small>AI Insight</small></span></a>
+        <a href="/settings" class="nav" data-path="/settings"><span class="nav-icon">05</span><span><b>设置</b><small>Settings</small></span></a>
+      </nav>
+      <div class="sidebar-user">
+        <div class="avatar">AI</div>
+        <div><b>Paper</b><span>Real OFF</span></div>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar" id="topbar"></header>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script src="/static/app.js?v=monitor-ui-2"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

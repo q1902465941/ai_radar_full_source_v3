@@ -1,0 +1,47 @@
+{% extends "layout.html" %}{% block content %}
+<section class="page-head cockpit-head">
+  <div>
+    <p class="eyebrow">Monitor Control</p>
+    <h1>猎妖人 AI Radar 控制台</h1>
+    <p>AI 正在扫描市场并维护纸面闭环，真实交易保持关闭。</p>
+  </div>
+  <div class="mode-pill">Paper / REST 在线</div>
+</section>
+
+<section class="overview-grid">
+  <section class="panel hero-status" id="overviewMarketState">
+    <div class="panel-title compact"><b>市场状态</b><span>AI Insight</span></div>
+    <div class="state-word">LOADING <i></i></div>
+    <p class="muted">正在读取雷达扫描状态...</p>
+  </section>
+  <section class="panel">
+    <div class="panel-title compact"><b>全局扫描概览</b><span>Radar Summary</span></div>
+    <div class="summary-grid local-summary" id="overviewMetrics"></div>
+  </section>
+  <section class="panel">
+    <div class="panel-title compact"><b>方向分布</b><span>扫描目标池</span></div>
+    <div class="overview-direction" id="overviewDirection"></div>
+  </section>
+  <section class="panel">
+    <div class="panel-title compact"><b>最新 AI 候选</b><span>Top Confirmed</span></div>
+    <div class="overview-candidates" id="overviewCandidates"></div>
+  </section>
+</section>
+
+<section class="overview-ops-grid">
+  <section class="panel decision-panel" id="decisionPanel">
+    <div class="panel-title compact"><b>AI 决策面板</b><span>等待扫描</span></div>
+    <div class="rail-empty">加载候选结构中...</div>
+  </section>
+
+  <section class="panel guard-panel" id="guardPanel">
+    <div class="panel-title compact"><b>候选过滤</b><span>真实交易 OFF</span></div>
+    <div class="rail-empty">等待风控统计...</div>
+  </section>
+
+  <section class="panel watch-panel" id="watchPanel">
+    <div class="panel-title compact"><b>扫描范围</b><span>Dynamic Stream</span></div>
+    <div class="rail-empty">等待活跃币种...</div>
+  </section>
+</section>
+{% endblock %}{% block scripts %}<script>window.PAGE='dashboard'; refreshDashboardOverview(); setInterval(refreshDashboardOverview,5000);</script>{% endblock %}

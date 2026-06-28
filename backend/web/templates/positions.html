@@ -1,0 +1,108 @@
+{% extends "layout.html" %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <h1>持仓管理</h1>
+    <p>上方摘要和“未平仓持仓”代表当前仍在场内的仓位；“已平仓记录”只是历史复盘，不代表现在还持有。</p>
+  </div>
+  <div class="mode-pill">Paper / REST 在线</div>
+</section>
+
+<section class="summary-grid" id="summary"></section>
+
+<section class="panel">
+  <div class="panel-title">
+    <b>不开仓诊断</b>
+    <span>纸面候选、策略匹配、风控状态；真实交易保持关闭</span>
+  </div>
+  <section class="summary-grid learning-grid" id="autoTradeDiagSummary"></section>
+  <div class="table-wrap">
+    <table class="data-table" id="autoTradeDiagTable">
+      <thead>
+        <tr>
+          <th>策略</th><th>匹配</th><th>拒绝原因</th><th>示例候选</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-title">
+    <b>AI 深度亏盈归因</b>
+    <span>逐笔交易复盘，学习为什么亏、为什么赚，并生成下一步过滤规则</span>
+  </div>
+  <section class="summary-grid learning-grid" id="deepAttributionSummary"></section>
+  <div class="table-wrap">
+    <table class="data-table" id="deepAttributionTable">
+      <thead>
+        <tr>
+          <th>类型</th><th>根因/驱动</th><th>样本</th><th>胜率</th><th>PF</th><th>PnL</th><th>建议动作</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table" id="deepTradeTable">
+      <thead>
+        <tr>
+          <th>合约</th><th>方向</th><th>净PnL</th><th>原因</th><th>金额</th><th>费用</th><th>AI 归因结论</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-title">
+    <b>当前未平仓持仓</b>
+    <span>open_count=0 时代表本地和交易闭环当前没有持仓</span>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table" id="openTable">
+      <thead>
+        <tr>
+          <th>合约</th><th>方向</th><th>阶段</th><th>评分</th><th>入场价</th><th>数量</th>
+          <th>保证金</th><th>名义价值</th><th>风险</th><th>手续费</th>
+          <th>止损/锁定</th><th>T1</th><th>T2</th><th>当前价</th>
+          <th>净浮盈</th><th>ROI</th><th>开仓时间</th><th>操作</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-title">
+    <b>历史已平仓记录</b>
+    <span>复盘归档，不是当前持仓；PnL 为扣除滑点和手续费后的净值</span>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table" id="closedTable">
+      <thead>
+        <tr>
+          <th>合约</th><th>方向</th><th>入场价</th><th>平仓价</th><th>数量</th>
+          <th>保证金</th><th>名义价值</th><th>毛PnL</th><th>手续费</th><th>净PnL</th>
+          <th>ROI</th><th>风险</th><th>平仓原因</th><th>开仓时间</th><th>平仓时间</th><th>来源ID</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+window.PAGE='positions';
+refreshPositions();
+refreshAutoTradeDiagnostics();
+refreshDeepAttribution();
+setInterval(refreshPositions,2000);
+setInterval(refreshAutoTradeDiagnostics,5000);
+setInterval(refreshDeepAttribution,30000);
+</script>
+{% endblock %}

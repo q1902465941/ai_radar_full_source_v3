@@ -1,0 +1,5 @@
+jesse==2.4.0
+
+# Keep this file separate from ../requirements.txt.
+# Jesse 2.4.0 pins requests~=2.32.0 and pytest~=6.2.5, which conflicts with
+# the main trading environment's Binance SDK / cyqnt-trd dependencies.

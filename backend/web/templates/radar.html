@@ -1,0 +1,37 @@
+{% extends "layout.html" %}{% block content %}
+<section class="page-head cockpit-head">
+  <div>
+    <p class="eyebrow">猎妖人 AI Radar</p>
+    <h1>扫描是证据，不是下单命令。先识别结构，再交给 AI 与风控门判断。</h1>
+    <p>目标池最多 50 个，页面按后端真实返回数量展开显示，不隐藏、不凑数。</p>
+  </div>
+  <div class="scan-actions">
+    <button class="btn" type="button" data-action="scan-now" data-busy-label="扫描中..." aria-label="立即刷新雷达扫描" onclick="scanNow(event)">立即刷新</button>
+    <span id="scanStatus" class="scan-status" role="status" aria-live="polite"></span>
+  </div>
+</section>
+
+<section class="radar-scan-layout">
+  <section class="radar-glance" id="radarGlance"></section>
+
+  <section class="panel candidate-panel">
+    <div class="panel-title">
+      <b>AI 候选队列</b>
+      <span>只展示通过基础确认的候选；扫描不是下单命令</span>
+    </div>
+    <section class="candidate-grid" id="candidates"></section>
+  </section>
+  <section class="panel table-panel">
+    <div class="panel-title radar-evidence-title">
+      <b>扫描证据矩阵</b>
+      <span id="radarEvidenceMeta">实际 -- / 目标50</span>
+    </div>
+    <div class="radar-compact-board">
+      <div class="radar-compact-head">
+        <span>#</span><span>币种</span><span>价格</span><span>方向</span><span>分</span><span>动作</span><span>结构</span><span>入场</span><span>风控/原因</span><span>证据</span>
+      </div>
+      <div class="radar-compact-rows" id="radarCompactRows"></div>
+    </div>
+  </section>
+</section>
+{% endblock %}{% block scripts %}<script>window.PAGE='radar'; refreshRadar(); setInterval(refreshRadar,2500);</script>{% endblock %}
