@@ -23,6 +23,38 @@ def test_v2_app_health_route():
     }
 
 
+def test_v2_app_starts_hedge_runtime_when_enabled(monkeypatch):
+    import backend.app.main as app_main
+    from backend.config import settings
+
+    class RuntimeController:
+        def __init__(self):
+            self.started = 0
+            self.stopped = 0
+
+        def start(self):
+            self.started += 1
+
+        def stop(self):
+            self.stopped += 1
+
+    controller = RuntimeController()
+    monkeypatch.setattr(settings, "hedge_runtime_enabled", True, raising=False)
+    monkeypatch.setattr(app_main, "create_hedge_fund_runtime", lambda: controller, raising=False)
+
+    with TestClient(app_main.create_app(initialize_database=False)) as client:
+        response = client.get("/api/v2/health")
+        assert response.json() == {
+            "ok": True,
+            "service": "ai-radar-api",
+            "version": "v2",
+        }
+        assert controller.started == 1
+        assert client.app.state.hedge_fund_runtime is controller
+
+    assert controller.stopped == 1
+
+
 def test_v2_task_status_route_returns_registry_task():
     registry = TaskRegistry()
     task = registry.create(kind="radar_scan", metadata={"source": "test"})

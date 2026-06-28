@@ -25,3 +25,15 @@ Use two fixed review roles:
 - Role B: risk officer, finding where the strategy can fail.
 
 Every researched strategy must produce a report under `trading_lab/reports/` using `trading_lab/strategy_template.md`.
+
+## Event-Driven Hedge Fund Backend Rules
+
+When upgrading the event-driven trading backend:
+
+1. Do not change UI, frontend, dashboard pages, web templates/static files, or public API schemas.
+2. Every executable strategy must be registered through the strategy universe.
+3. Execution is live-only when enabled: real Binance Futures orders require `TRADE_MODE=live`, `LIVE_TRADING_ENABLED=true`, and `LIVE_USE_TEST_ORDER=false`.
+4. Learning updates must be driven by trade events, not raw scan output.
+5. Portfolio state must update immediately from trade events.
+6. Risk parity controls capital allocation across ranked strategies.
+7. Dynamic leverage controls risk exposure from market regime and drawdown.

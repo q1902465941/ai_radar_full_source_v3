@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     position_manage_interval_seconds: int = 2
     trade_mode: str = "paper"       # paper | live
     auto_trading_enabled: bool = False
+    hedge_runtime_enabled: bool = False
+    hedge_runtime_capital_usdt: float = 1000.0
+    hedge_runtime_symbols: str = ""
     live_trading_enabled: bool = False
     ai_enabled: bool = False
     ai_strategy_provider: str = "rule"  # rule | openai | codex_cli | deepseek

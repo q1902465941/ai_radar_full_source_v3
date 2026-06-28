@@ -19,3 +19,12 @@ def test_backend_dockerfile_uses_production_web_server():
 
     assert "gunicorn" in dockerfile
     assert "uvicorn.workers.UvicornWorker" in dockerfile
+
+
+def test_backend_dockerfile_copies_hedge_runtime_backend_packages():
+    dockerfile = (ROOT / "Dockerfile.backend").read_text(encoding="utf-8")
+
+    for package in ("runtime", "strategy", "meta", "portfolio", "execution", "broker"):
+        assert f"COPY {package} ./{package}" in dockerfile
+    assert "COPY data ./data" in dockerfile
+    assert "COPY learning ./learning" in dockerfile
