@@ -226,6 +226,15 @@ def test_v2_latest_radar_scan_route_returns_persisted_scan(tmp_path):
     assert data["scan"]["top50_count"] == 1
     assert data["candidates"][0]["symbol"] == "ETHUSDT"
     assert data["candidates"][0]["direction"] == "SHORT"
+    assert "score_features" not in data["candidates"][0]
+    assert "score_explain" not in data["candidates"][0]
+    assert "raw" not in data["candidates"][0]
+
+    detail_response = client.get("/api/v2/radar/scans/latest?include_details=true")
+    detail_candidate = detail_response.json()["candidates"][0]
+    assert detail_candidate["score_features"] == {"volume_score": 80}
+    assert detail_candidate["score_explain"] == {"score_model": "test"}
+    assert detail_candidate["raw"] == {"symbol": "ETHUSDT", "score": 77.5}
 
 
 def test_v2_dashboard_overview_summarizes_existing_radar_state(monkeypatch):
