@@ -7979,6 +7979,61 @@ def test_sensitive_config_post_accepts_valid_api_token(monkeypatch):
     assert writes
 
 
+def test_radar_scan_now_is_not_blocked_by_api_token_middleware(monkeypatch):
+    from backend import main
+
+    class FakeRadar:
+        top50 = [object()]
+        last_scan_time = "11:22:33"
+
+        def scan_in_progress(self):
+            return False
+
+        def scan_status(self):
+            return {"in_progress": False, "top50_count": 1}
+
+    monkeypatch.setattr(settings, "api_token", "test-token")
+    monkeypatch.setattr(main, "radar_engine", FakeRadar())
+    monkeypatch.setattr(main, "_start_radar_scan_background", lambda **kwargs: True)
+    client = TestClient(main.app)
+
+    response = client.post("/api/radar/scan-now")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["count"] == 1
+
+
+def test_radar_scan_now_starts_background_scan_without_waiting(monkeypatch):
+    from backend import main
+
+    calls = []
+
+    class FakeRadar:
+        top50 = []
+        last_scan_time = "--:--:--"
+
+        def scan_in_progress(self):
+            return False
+
+        def scan_status(self):
+            return {"in_progress": True, "top50_count": 0}
+
+    async def fail_if_waited(**kwargs):
+        raise AssertionError("scan-now must not wait for full radar scan")
+
+    monkeypatch.setattr(main, "radar_engine", FakeRadar())
+    monkeypatch.setattr(main, "_radar_scan_with_timeout", fail_if_waited)
+    monkeypatch.setattr(main, "_start_radar_scan_background", lambda **kwargs: calls.append(kwargs) or True)
+
+    result = __import__("asyncio").run(main.api_scan_now())
+
+    assert result["ok"] is True
+    assert result["started"] is True
+    assert result["error"] == ""
+    assert calls == [{"force_refresh": True}]
+
+
 def test_radar_scan_now_does_not_queue_or_cancel_when_scan_is_running(monkeypatch):
     from backend import main
 

@@ -102,11 +102,18 @@ templates = Jinja2Templates(directory="backend/web/templates")
 RADAR_API_SCAN_TIMEOUT_SECONDS = 75.0
 RADAR_DIAGNOSTICS_SCAN_TIMEOUT_SECONDS = 12.0
 _universal_anomaly_auto_train_thread: threading.Thread | None = None
+API_WRITE_AUTH_EXEMPT_PATHS = {
+    "/api/radar/scan-now",
+}
 
 
 @app.middleware("http")
 async def api_write_auth(request: Request, call_next):
-    if request.url.path.startswith("/api/") and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+    if (
+        request.url.path.startswith("/api/")
+        and request.url.path not in API_WRITE_AUTH_EXEMPT_PATHS
+        and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+    ):
         expected = str(settings.api_token or "").strip()
         if not expected:
             return JSONResponse({"detail": "api_token_not_configured"}, status_code=503)
@@ -373,13 +380,11 @@ async def api_scan_now():
             "scan_status": _radar_api_scan_status(),
         }
     try:
-        items=await _radar_scan_with_timeout(force_refresh=True)
-        return {"ok":True,"started":True,"count":len(items),"last_scan_time":radar_engine.last_scan_time,"scan_status":_radar_api_scan_status()}
-    except asyncio.TimeoutError:
+        started = _start_radar_scan_background(force_refresh=True)
         return {
             "ok": True,
-            "started": True,
-            "error": "radar_scan_still_running",
+            "started": started,
+            "error": "" if started else "radar_scan_already_running",
             "count": len(radar_engine.top50),
             "last_scan_time": radar_engine.last_scan_time,
             "scan_status": _radar_api_scan_status(),

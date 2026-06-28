@@ -54,6 +54,36 @@ async function j(url, opts) {
   return data;
 }
 
+let radarRefreshTimer = 0;
+
+function clearScheduledRadarRefresh() {
+  if (!radarRefreshTimer || typeof window === 'undefined') return;
+  window.clearTimeout(radarRefreshTimer);
+  radarRefreshTimer = 0;
+}
+
+function scheduleRadarRefresh(delayMs = 2500) {
+  if (typeof window === 'undefined' || window.PAGE !== 'radar' || radarRefreshTimer) return;
+  radarRefreshTimer = window.setTimeout(async () => {
+    radarRefreshTimer = 0;
+    try {
+      await refreshRadar();
+    } catch (err) {
+      setScanStatus(`扫描状态刷新失败：${err.message || err}`, false);
+    }
+  }, delayMs);
+}
+
+function radarScanStillRunning(data) {
+  const status = data && data.scan_status ? data.scan_status : {};
+  const rows = data && Array.isArray(data.top50) ? data.top50 : [];
+  return rows.length === 0 && (
+    status.in_progress ||
+    data.error === 'radar_scan_running_no_cache' ||
+    data.error === 'radar_scan_warming_up'
+  );
+}
+
 function showSettingsOut(value) {
   const el = document.getElementById('settingsOut');
   if (!el) return;
@@ -206,7 +236,15 @@ async function scanNow(event) {
     if (window.PAGE === 'radar') await refreshSystemReadiness();
     const settingsOut = document.getElementById('settingsOut');
     if (settingsOut) settingsOut.textContent = JSON.stringify(out, null, 2);
+    if (out.error === 'radar_scan_already_running' || out.error === 'radar_scan_still_running') {
+      setScanStatus('扫描仍在运行，完成后自动刷新结果...', false);
+      scheduleRadarRefresh(2000);
+      return out;
+    }
+    if (!out.ok) throw new Error(out.error || 'radar_scan_failed');
     setScanStatus(`已刷新 ${out.count || 0} 条 · ${out.last_scan_time || '--'} · ${((Date.now() - started) / 1000).toFixed(1)}s`, false);
+    clearScheduledRadarRefresh();
+    return out;
   } catch (err) {
     const msg = `刷新失败：${err.message || err}`;
     setScanStatus(msg, false);
@@ -582,6 +620,12 @@ async function refreshRadar() {
   renderRadarGlance(data);
   const rows = data.top50 || [];
   const actualCount = rows.length;
+  if (radarScanStillRunning(data)) {
+    setScanStatus('扫描正在运行，完成后自动刷新结果...', false);
+    scheduleRadarRefresh(2500);
+  } else {
+    clearScheduledRadarRefresh();
+  }
   const meta = document.getElementById('radarEvidenceMeta');
   if (meta) {
     meta.textContent = `实际 ${actualCount} / 目标50 · 全部展开`;
