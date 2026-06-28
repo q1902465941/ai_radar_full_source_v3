@@ -14,6 +14,18 @@
 <section class="radar-scan-layout">
   <section class="radar-glance" id="radarGlance"></section>
 
+  <section class="panel readiness-panel">
+    <div class="panel-title">
+      <b>System Readiness</b>
+      <span>Market / WAIT / Live / Paper / Codex / WebSocket / DB</span>
+    </div>
+    <section class="summary-grid readiness-grid" id="systemReadinessSummary"></section>
+    <div class="readiness-body">
+      <div class="readiness-blockers" id="systemReadinessBlockers"></div>
+      <ol class="readiness-actions" id="systemReadinessActions"></ol>
+    </div>
+  </section>
+
   <section class="panel candidate-panel">
     <div class="panel-title">
       <b>AI 候选队列</b>
@@ -34,4 +46,4 @@
     </div>
   </section>
 </section>
-{% endblock %}{% block scripts %}<script>window.PAGE='radar'; refreshRadar(); setInterval(refreshRadar,2500);</script>{% endblock %}
+{% endblock %}{% block scripts %}<script>window.PAGE='radar'; refreshRadar(); refreshSystemReadiness(); setInterval(refreshSystemReadiness,5000);</script>{% endblock %}

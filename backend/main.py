@@ -11,7 +11,7 @@ from pydantic import BaseModel
 import uvicorn
 from backend.config import settings
 from backend.config_env import update_env_values
-from backend.ai_strategy.openai_strategy_client import openai_strategy_client
+from backend.ai_strategy.ai_service import ai_service
 from backend.ai_strategy.position_policy_client import ai_position_policy_client
 from backend.learning.strategy_evolver import strategy_evolver
 from backend.learning.strategy_registry import strategy_registry
@@ -42,6 +42,7 @@ from backend.market.market_service import market_service
 from backend.market.binance_ws_ticker import binance_ticker_stream
 from backend.market.dynamic_symbol_stream import dynamic_symbol_stream
 from backend.exchange.binance_futures import binance_futures
+from backend.system_readiness import system_readiness_report
 from backend.radar.universal_anomaly_trainer import universal_anomaly_trainer
 from backend.radar.universal_anomaly_training import universal_anomaly_training
 from backend.radar.universal_anomaly_auto_trainer import run_auto_train_loop, universal_anomaly_auto_trainer
@@ -348,6 +349,18 @@ async def api_radar():
         "dynamic_stream": scan_status.get("dynamic_stream", {}),
     }
 
+@app.get("/api/system/readiness")
+async def api_system_readiness():
+    scan_error = ""
+    warmup_started = False
+    if not radar_engine.top50:
+        if radar_engine.scan_in_progress():
+            scan_error = "radar_scan_running_no_cache"
+        else:
+            warmup_started = _start_radar_scan_background()
+            scan_error = "radar_scan_warming_up"
+    return system_readiness_report(warmup_started=warmup_started, scan_error=scan_error)
+
 @app.post("/api/radar/scan-now")
 async def api_scan_now():
     if radar_engine.scan_in_progress():
@@ -357,11 +370,11 @@ async def api_scan_now():
             "error": "radar_scan_already_running",
             "count": len(radar_engine.top50),
             "last_scan_time": radar_engine.last_scan_time,
-            "scan_status": radar_engine.scan_status(),
+            "scan_status": _radar_api_scan_status(),
         }
     try:
         items=await _radar_scan_with_timeout(force_refresh=True)
-        return {"ok":True,"started":True,"count":len(items),"last_scan_time":radar_engine.last_scan_time,"scan_status":radar_engine.scan_status()}
+        return {"ok":True,"started":True,"count":len(items),"last_scan_time":radar_engine.last_scan_time,"scan_status":_radar_api_scan_status()}
     except asyncio.TimeoutError:
         return {
             "ok": True,
@@ -369,10 +382,10 @@ async def api_scan_now():
             "error": "radar_scan_still_running",
             "count": len(radar_engine.top50),
             "last_scan_time": radar_engine.last_scan_time,
-            "scan_status": radar_engine.scan_status(),
+            "scan_status": _radar_api_scan_status(),
         }
     except Exception as exc:
-        return {"ok":False,"started":False,"error":f"{type(exc).__name__}:{exc}","scan_status":radar_engine.scan_status()}
+        return {"ok":False,"started":False,"error":f"{type(exc).__name__}:{exc}","scan_status":_radar_api_scan_status()}
 
 
 @app.get("/api/radar/universal-anomaly/training")
@@ -1012,7 +1025,7 @@ async def api_strategy_ai_realtime():
             scan_error = f"{type(exc).__name__}:{exc}"
     performance = performance_guard.summary()
     candidates, candidate_source = autotrader._candidate_batch(performance)
-    ai_status = openai_strategy_client.status(candidate_count=len(candidates), candidate_source=candidate_source)
+    ai_status = ai_service.status(candidate_count=len(candidates), candidate_source=candidate_source)
     provider = ai_status.get("provider")
     provider_status = ai_status.get(provider) if provider in {"deepseek", "codex_cli"} else {}
     return {
@@ -1172,7 +1185,7 @@ async def api_autotrade_diagnostics():
             loop_performance=loop_performance,
         ),
         "ai_strategy": _compact_ai_strategy_status(
-            openai_strategy_client.status(candidate_count=len(candidates), candidate_source=candidate_source)
+            ai_service.status(candidate_count=len(candidates), candidate_source=candidate_source)
         ),
         "ai_strategy_quality": {
             "summary": ai_strategy_feedback.quality_summary(),

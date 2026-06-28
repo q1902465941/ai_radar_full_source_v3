@@ -19,6 +19,16 @@ def build_engine(database_url: str | None = None) -> Engine:
     return create_engine(url, connect_args=connect_args, future=True)
 
 
+engine = build_engine()
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+def init_db(bind: Engine | None = None) -> None:
+    from backend.app.db.models import Base
+
+    Base.metadata.create_all(bind or engine)
+
+
 @contextmanager
 def session_scope(session_factory: sessionmaker[Session]) -> Iterator[Session]:
     session = session_factory()

@@ -4632,6 +4632,100 @@ def test_autotrade_diagnostics_starts_background_scan_without_waiting_when_cache
     assert result["scan_error"] == "radar_scan_warming_up"
     assert result["candidate_filter"]["lightweight"] is True
 
+def test_system_readiness_api_exposes_chain_status_without_waiting_or_leaking_secrets(monkeypatch):
+    from backend.main import app
+
+    calls = {"started": False}
+    monkeypatch.setattr(settings, "api_token", "secret-api-token-value")
+    monkeypatch.setattr(settings, "binance_api_key", "SECRET_BINANCE_KEY_123")
+    monkeypatch.setattr(settings, "binance_api_secret", "SECRET_BINANCE_SECRET_456")
+    monkeypatch.setattr(radar_engine, "top50", [])
+    monkeypatch.setattr(radar_engine, "scan_in_progress", lambda: False)
+    monkeypatch.setattr(main_module.radar_engine, "top50", [])
+    monkeypatch.setattr(main_module.radar_engine, "scan_in_progress", lambda: False)
+
+    async def fail_scan_wait(*_args, **_kwargs):
+        raise AssertionError("readiness should not wait for a full radar scan")
+
+    def fake_start_background(*_args, **_kwargs):
+        calls["started"] = True
+        return True
+
+    monkeypatch.setattr(main_module, "_radar_scan_with_timeout", fail_scan_wait)
+    monkeypatch.setattr(main_module, "_start_radar_scan_background", fake_start_background)
+
+    client = TestClient(app)
+    response = client.get("/api/system/readiness")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert calls["started"] is True
+    for section in ["market_data", "wait", "live_enablement", "paper_learning", "codex", "websocket", "database", "blockers"]:
+        assert section in data
+    assert data["market_data"]["warmup_started"] is True
+    assert any(blocker["code"] == "radar_scan_warming_up" for blocker in data["blockers"])
+    raw = json.dumps(data, ensure_ascii=False)
+    assert "SECRET_BINANCE_KEY_123" not in raw
+    assert "SECRET_BINANCE_SECRET_456" not in raw
+    assert "secret-api-token-value" not in raw
+
+
+def test_system_readiness_report_marks_codex_wait_and_paper_closed_loop(monkeypatch):
+    import backend.system_readiness as system_readiness
+
+    item = high_quality_item(symbol="READYWAITUSDT", side="LONG", price=100)
+    item.score = 88
+    item.fund_confirm_count = 3
+    item.fund_confirm_total = 5
+    monkeypatch.setattr(radar_engine, "top50", [item])
+    monkeypatch.setattr(settings, "ai_enabled", True)
+    monkeypatch.setattr(settings, "ai_strategy_provider", "codex_cli")
+    monkeypatch.setattr(settings, "require_codex_strategy_for_entry", True)
+    monkeypatch.setattr(settings, "trade_mode", "live")
+    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    monkeypatch.setattr(settings, "paper_probe_enabled", True)
+    monkeypatch.setattr(settings, "auto_trading_candidate_mode", "paper_top")
+    monkeypatch.setattr(settings, "auto_trading_candidate_min_score", 55.0)
+    monkeypatch.setattr(
+        system_readiness.ai_service,
+        "status",
+        lambda **_kwargs: {
+            "enabled": True,
+            "provider": "codex_cli",
+            "candidate_count_before_ai": 1,
+            "will_invoke_for_current_candidates": True,
+            "not_invoked_reason": "",
+            "codex_cli": {
+                "command_found": False,
+                "model": "gpt-test",
+                "last_status": "never_invoked",
+                "last_error": "",
+            },
+        },
+    )
+
+    report = system_readiness.system_readiness_report()
+
+    assert report["wait"]["candidate_symbols"] == ["READYWAITUSDT"]
+    assert report["paper_learning"]["closed_loop_enabled"] is True
+    assert any(blocker["code"] == "codex_command_missing" for blocker in report["wait"]["blockers"])
+    assert any(blocker["code"] == "codex_command_missing" for blocker in report["blockers"])
+
+
+def test_system_readiness_database_probe_counts_tables(tmp_path):
+    import backend.system_readiness as system_readiness
+
+    database = DB(str(tmp_path / "readiness.sqlite"))
+    database.set_kv("probe", {"ok": True})
+
+    health = system_readiness.database_health(database)
+
+    assert health["ok"] is True
+    assert health["exists"] is True
+    assert health["tables"]["kv"] == 1
+    assert "readiness.sqlite" in health["path"]
+
+
 def test_paper_top_balances_old_wick_noise_when_current_candle_is_clean(monkeypatch):
     item = high_quality_item(symbol="BALANCEDWICKUSDT", side="LONG", price=100)
     item.score = 92

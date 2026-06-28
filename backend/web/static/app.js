@@ -203,6 +203,7 @@ async function scanNow(event) {
   try {
     const out = await j('/api/radar/scan-now', { method: 'POST' });
     if (window.PAGE === 'radar') await refreshRadar();
+    if (window.PAGE === 'radar') await refreshSystemReadiness();
     const settingsOut = document.getElementById('settingsOut');
     if (settingsOut) settingsOut.textContent = JSON.stringify(out, null, 2);
     setScanStatus(`已刷新 ${out.count || 0} 条 · ${out.last_scan_time || '--'} · ${((Date.now() - started) / 1000).toFixed(1)}s`, false);
@@ -655,6 +656,91 @@ async function refreshRadar() {
     </article>
   `;
   }).join('') : '<div class="radar-empty">当前后端没有返回扫描结果。</div>';
+}
+
+function yesNo(value) {
+  return value ? 'ON' : 'OFF';
+}
+
+function severityClass(severity) {
+  const value = String(severity || '').toUpperCase();
+  if (value.includes('BLOCK')) return 'red';
+  if (value === 'WARN' || value === 'WAIT') return 'wait';
+  return 'green';
+}
+
+function blockerLine(blocker) {
+  if (!blocker) return '';
+  return `
+    <div class="readiness-blocker">
+      <span class="badge ${severityClass(blocker.severity)}">${escapeHtml(blocker.severity || '--')}</span>
+      <b>${escapeHtml(blocker.code || '--')}</b>
+      <small>${escapeHtml(blocker.source || '--')}</small>
+      <p>${escapeHtml(blocker.message || '')}</p>
+      <em>${escapeHtml(blocker.action || '')}</em>
+    </div>
+  `;
+}
+
+function renderSystemReadiness(data) {
+  const summary = document.getElementById('systemReadinessSummary');
+  const blockersEl = document.getElementById('systemReadinessBlockers');
+  const actionsEl = document.getElementById('systemReadinessActions');
+  if (!summary && !blockersEl && !actionsEl) return;
+  const market = data.market_data || {};
+  const wait = data.wait || {};
+  const paper = data.paper_learning || {};
+  const live = data.live_enablement || {};
+  const codex = data.codex || {};
+  const ws = data.websocket || {};
+  const ticker = ws.ticker || {};
+  const dynamic = ws.dynamic || {};
+  const database = data.database || {};
+  const cards = [
+    ['Overall', `${data.status || '--'} / blockers ${(data.blockers || []).length}`],
+    ['Market', `${market.refresh_source || '--'} / snapshots ${market.effective_snapshot_count ?? '--'}`],
+    ['Radar Scan', `${market.scan && market.scan.in_progress ? 'RUNNING' : 'IDLE'} / top50 ${market.scan ? market.scan.top50_count ?? '--' : '--'}`],
+    ['WAIT', `${wait.status || '--'} / candidates ${(wait.candidate_symbols || []).length}`],
+    ['Paper Loop', `${yesNo(paper.auto_loop_enabled)} / ${paper.candidate_mode || '--'}`],
+    ['Live Stage', `${live.current_stage || '--'} / live ${yesNo(live.switches && live.switches.live_trading_enabled)}`],
+    ['Codex', `${codex.command_found ? 'OK' : 'MISS'} / ${codex.last_status || '--'}`],
+    ['WS', `ticker ${ticker.running ? 'ON' : 'OFF'} / dyn ${dynamic.active_count ?? 0}`],
+    ['DB', `${database.ok ? 'OK' : 'BAD'} / radar ${(database.tables || {}).radar_snapshots ?? '--'}`],
+  ];
+  if (summary) {
+    summary.innerHTML = cards.map((x) => `<div class="summary-card readiness-card"><span>${x[0]}</span><b>${escapeHtml(x[1])}</b></div>`).join('');
+  }
+  if (blockersEl) {
+    const blockers = (data.blockers || []).slice(0, 12);
+    blockersEl.innerHTML = blockers.length
+      ? blockers.map(blockerLine).join('')
+      : '<div class="readiness-empty">No active blockers.</div>';
+  }
+  if (actionsEl) {
+    const actions = (data.next_actions || []).slice(0, 6);
+    actionsEl.innerHTML = actions.length
+      ? actions.map((x) => `<li>${escapeHtml(x)}</li>`).join('')
+      : '<li>No action required.</li>';
+  }
+}
+
+async function refreshSystemReadiness() {
+  const summary = document.getElementById('systemReadinessSummary');
+  const blockersEl = document.getElementById('systemReadinessBlockers');
+  if (!summary && !blockersEl) return null;
+  try {
+    const data = await j('/api/system/readiness');
+    renderSystemReadiness(data);
+    return data;
+  } catch (err) {
+    if (summary) {
+      summary.innerHTML = `<div class="summary-card readiness-card"><span>Readiness</span><b>LOAD FAIL</b></div>`;
+    }
+    if (blockersEl) {
+      blockersEl.innerHTML = `<div class="readiness-empty">${escapeHtml(errorMessage(err))}</div>`;
+    }
+    return null;
+  }
 }
 
 async function refreshPositions() {
@@ -1188,6 +1274,7 @@ window.manualClose = manualClose;
 window.refreshDeepAttribution = refreshDeepAttribution;
 window.refreshAutoTradeDiagnostics = refreshAutoTradeDiagnostics;
 window.refreshDashboardOverview = refreshDashboardOverview;
+window.refreshSystemReadiness = refreshSystemReadiness;
 
 activateNav();
 refreshTop();

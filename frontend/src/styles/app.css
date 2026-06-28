@@ -399,6 +399,217 @@ nav {
   padding: 18px;
 }
 
+.radar-view {
+  display: grid;
+  gap: 16px;
+}
+
+.radar-control-panel,
+.radar-summary-grid div,
+.radar-candidate-panel,
+.radar-table-panel,
+.radar-candidate-card,
+.radar-table-row,
+.radar-error {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  background: rgba(17, 22, 33, 0.82);
+}
+
+.radar-control-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 164px;
+  padding: 18px;
+}
+
+.radar-control-panel span,
+.radar-summary-grid span,
+.radar-candidate-card span,
+.radar-table-row small {
+  color: #8f9aae;
+  font-size: 12px;
+}
+
+.radar-control-panel h2 {
+  margin: 8px 0;
+  font-size: 28px;
+  letter-spacing: 0;
+}
+
+.radar-control-panel p {
+  max-width: 680px;
+  margin: 0;
+  color: #aeb8ca;
+  line-height: 1.55;
+}
+
+.radar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.primary-action,
+.secondary-action {
+  min-height: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 0 14px;
+  color: #eef5ff;
+}
+
+.primary-action {
+  background: #2ac28b;
+  color: #04110c;
+  font-weight: 800;
+}
+
+.primary-action:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.secondary-action {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.radar-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.radar-summary-grid div {
+  min-height: 92px;
+  padding: 12px;
+}
+
+.radar-summary-grid b {
+  display: block;
+  margin-top: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radar-summary-grid small {
+  display: block;
+  margin-top: 8px;
+  color: #8f9aae;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radar-error {
+  padding: 12px 14px;
+  color: #ff8797;
+}
+
+.radar-candidate-panel,
+.radar-table-panel {
+  padding: 16px;
+}
+
+.radar-candidate-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.radar-candidate-card {
+  display: grid;
+  gap: 10px;
+  min-height: 174px;
+  padding: 13px;
+}
+
+.radar-candidate-card b,
+.radar-candidate-card span {
+  display: block;
+}
+
+.radar-candidate-card strong {
+  font-size: 14px;
+}
+
+.radar-candidate-card em,
+.radar-table-row em {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-style: normal;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.score-line {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.score-line i {
+  display: block;
+  width: var(--w);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2ac28b, #757bff);
+}
+
+.radar-table {
+  overflow-x: auto;
+}
+
+.radar-table-head,
+.radar-table-row {
+  display: grid;
+  grid-template-columns: 54px 128px 98px 78px 78px 112px 152px 92px minmax(260px, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 1130px;
+}
+
+.radar-table-head {
+  padding: 0 12px 10px;
+  color: #8f9aae;
+  font-size: 12px;
+}
+
+.radar-table-body {
+  display: grid;
+  gap: 8px;
+}
+
+.radar-table-row {
+  min-height: 68px;
+  padding: 10px 12px;
+}
+
+.radar-table-row strong,
+.radar-table-row small {
+  display: block;
+}
+
+.radar-table-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radar-empty {
+  min-height: 84px;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  padding: 28px 14px;
+  color: #8f9aae;
+  text-align: center;
+}
+
 @media (max-width: 980px) {
   .app-shell,
   .dashboard-layout,
@@ -452,6 +663,20 @@ nav {
     align-items: flex-start;
     flex-direction: column;
   }
+
+  .radar-control-panel {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .radar-actions {
+    justify-content: flex-start;
+  }
+
+  .radar-summary-grid,
+  .radar-candidate-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 720px) {
@@ -476,5 +701,10 @@ nav {
 
   .candidate-row {
     align-items: start;
+  }
+
+  .radar-summary-grid,
+  .radar-candidate-grid {
+    grid-template-columns: 1fr;
   }
 }

@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import asdict
 from typing import Any
 
+from backend.ai_strategy.ai_service import ai_service
 from backend.ai_strategy.dynamic_trade_model import auto_trading_risk_model
 from backend.ai_strategy.openai_strategy_client import openai_strategy_client
 from backend.ai_strategy.strategy_validator import strategy_validator
@@ -231,7 +232,7 @@ class ProductionAcceptanceRunner:
         plan_attempts = chain["plan_attempts"]
         max_plan_attempts = chain["attempted_candidates"]
         assert item is not None and plan is not None
-        ai_status = openai_strategy_client.status(candidate_count=len(candidates), candidate_source=candidate_source)
+        ai_status = ai_service.status(candidate_count=len(candidates), candidate_source=candidate_source)
         stages.append(
             self._stage(
                 "ai_strategy_plan",
@@ -425,7 +426,7 @@ class ProductionAcceptanceRunner:
         candidate_attempts: list[dict[str, Any]],
     ) -> StrategyPlan:
         active_strategy = strategy_registry.active()
-        return await openai_strategy_client.generate(
+        return await ai_service.generate_strategy(
             item,
             {
                 "open_positions": len(position_registry.list_open()),

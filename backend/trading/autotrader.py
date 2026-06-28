@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import Any
 
 from backend.account.account_service import account_service
+from backend.ai_strategy.ai_service import ai_service
 from backend.ai_strategy.dynamic_trade_model import auto_trading_risk_model
 from backend.ai_strategy.openai_strategy_client import openai_strategy_client
 from backend.ai_strategy.strategy_validator import strategy_validator
@@ -754,7 +755,7 @@ class AutoTrader:
         }
         if isinstance(strategy_geometry_sample, dict) and strategy_geometry_sample:
             position_context["strategy_geometry_sample"] = strategy_geometry_sample
-        return await openai_strategy_client.generate(
+        return await ai_service.generate_strategy(
             item,
             position_context,
         )

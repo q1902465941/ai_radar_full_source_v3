@@ -1333,6 +1333,97 @@ a {
   margin-bottom: 0;
 }
 
+.readiness-panel {
+  grid-column: 1 / -1;
+}
+
+.readiness-grid {
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  margin: 0;
+  padding: 14px 16px 8px;
+}
+
+.readiness-card {
+  min-height: 66px;
+  padding: 11px 12px;
+}
+
+.readiness-card b {
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.readiness-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(260px, .8fr);
+  gap: 12px;
+  padding: 0 16px 16px;
+}
+
+.readiness-blockers {
+  display: grid;
+  gap: 8px;
+}
+
+.readiness-blocker,
+.readiness-empty,
+.readiness-actions {
+  border: 1px solid rgba(143, 151, 189, .12);
+  border-radius: var(--radius);
+  background: rgba(7, 9, 17, .52);
+}
+
+.readiness-blocker {
+  display: grid;
+  grid-template-columns: 92px minmax(130px, .7fr) 92px minmax(220px, 1.4fr) minmax(220px, 1.2fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 46px;
+  padding: 9px 10px;
+}
+
+.readiness-blocker b,
+.readiness-blocker p,
+.readiness-blocker em {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.readiness-blocker b {
+  color: #f3f5ff;
+  font-size: 12px;
+}
+
+.readiness-blocker small {
+  color: var(--muted);
+}
+
+.readiness-blocker p {
+  color: #dce0f1;
+  font-style: normal;
+}
+
+.readiness-blocker em {
+  color: var(--muted);
+  font-style: normal;
+}
+
+.readiness-empty {
+  padding: 13px 14px;
+  color: var(--muted);
+}
+
+.readiness-actions {
+  margin: 0;
+  padding: 12px 16px 12px 32px;
+  color: #dce0f1;
+}
+
+.readiness-actions li + li {
+  margin-top: 8px;
+}
+
 .profile-row {
   display: flex;
   align-items: center;
@@ -2013,11 +2104,17 @@ a {
   .active-radar-box,
   .candidate-panel .candidate-grid,
   .candidate-grid,
+  .readiness-grid,
   .summary-grid,
   .settings-grid,
   .params-form,
   .config-form {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .readiness-body,
+  .readiness-blocker {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -2031,6 +2128,7 @@ a {
   .overview-ops-grid,
   .active-radar-box,
   .candidate-grid,
+  .readiness-grid,
   .summary-grid,
   .settings-grid,
   .params-form,

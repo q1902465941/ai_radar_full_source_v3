@@ -24,15 +24,33 @@ function readError(data: JsonObject, fallback: string): string {
   return fallback;
 }
 
-export async function apiGet<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_PREFIX}${path}`, {
-    ...init,
-    headers: buildHeaders(init),
-  });
+async function parseJsonResponse<T>(response: Response): Promise<T> {
   const text = await response.text();
   const data = text ? JSON.parse(text) as JsonObject : {};
   if (!response.ok) {
     throw new Error(readError(data, `HTTP ${response.status}`));
   }
   return data as T;
+}
+
+export async function apiGet<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_PREFIX}${path}`, {
+    ...init,
+    headers: buildHeaders(init),
+  });
+  return parseJsonResponse<T>(response);
+}
+
+export async function apiPost<T>(path: string, body?: unknown, init?: RequestInit): Promise<T> {
+  const headers = buildHeaders(init);
+  if (!headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  const response = await fetch(`${API_PREFIX}${path}`, {
+    ...init,
+    method: 'POST',
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return parseJsonResponse<T>(response);
 }

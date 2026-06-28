@@ -1,7 +1,11 @@
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import sessionmaker
 
 import backend.app.api.radar as radar_api
 import backend.app.api.dashboard as dashboard_api
+import backend.app.api.ai as ai_api
+from backend.app.db.models import Base, RadarCandidateRecord, RadarScanRecord
+from backend.app.db.session import build_engine, session_scope
 from backend.app.main import create_app
 from backend.app.workers.task_registry import TaskRegistry
 
@@ -41,6 +45,56 @@ def test_v2_task_status_route_returns_404_for_missing_task():
     assert response.json()["detail"] == "task_not_found"
 
 
+def test_v2_ai_status_route_uses_unified_service(monkeypatch):
+    class FakeAIService:
+        def status(self, **kwargs):
+            return {
+                "enabled": True,
+                "provider": "fake",
+                "audit": {"ai_tasks_table": True},
+            }
+
+    monkeypatch.setattr(ai_api, "ai_service", FakeAIService())
+    client = TestClient(create_app())
+
+    response = client.get("/api/v2/ai/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "service": {
+            "enabled": True,
+            "provider": "fake",
+            "audit": {"ai_tasks_table": True},
+        },
+    }
+
+
+def test_v2_radar_scan_route_returns_background_task():
+    registry = TaskRegistry()
+
+    class FakeTaskRunner:
+        def __init__(self):
+            self.submitted = []
+
+        def submit(self, kind, metadata, handler):
+            self.submitted.append({"kind": kind, "metadata": metadata, "handler": handler})
+            return registry.create(kind=kind, metadata=metadata)
+
+    runner = FakeTaskRunner()
+    client = TestClient(create_app(task_registry=registry, task_runner=runner))
+
+    response = client.post("/api/v2/radar/scans", json={"force_refresh": True})
+
+    assert response.status_code == 202
+    data = response.json()
+    assert data["ok"] is True
+    assert data["task"]["kind"] == "radar_scan"
+    assert data["task"]["state"] == "pending"
+    assert runner.submitted[0]["kind"] == "radar_scan"
+    assert runner.submitted[0]["metadata"] == {"force_refresh": True}
+
+
 def test_v2_radar_summary_uses_existing_radar_state(monkeypatch):
     class FakeRadarEngine:
         top50 = [object(), object(), object()]
@@ -69,6 +123,45 @@ def test_v2_radar_summary_uses_existing_radar_state(monkeypatch):
         "alert_count": 5,
         "scan_status": {"in_progress": False, "active_coins": {"active_count": 3}},
     }
+
+
+def test_v2_latest_radar_scan_route_returns_persisted_scan(tmp_path):
+    db_path = tmp_path / "app.db"
+    engine = build_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+
+    with session_scope(SessionLocal) as session:
+        session.add(
+            RadarScanRecord(
+                scan_id="scan-latest",
+                state="succeeded",
+                source="test",
+                top50_count=1,
+                market_heat=68,
+            )
+        )
+        session.add(
+            RadarCandidateRecord(
+                scan_id="scan-latest",
+                symbol="ETHUSDT",
+                rank=1,
+                score=77.5,
+                direction="SHORT",
+            )
+        )
+
+    client = TestClient(create_app(session_factory=SessionLocal, initialize_database=False))
+
+    response = client.get("/api/v2/radar/scans/latest")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["scan"]["scan_id"] == "scan-latest"
+    assert data["scan"]["top50_count"] == 1
+    assert data["candidates"][0]["symbol"] == "ETHUSDT"
+    assert data["candidates"][0]["direction"] == "SHORT"
 
 
 def test_v2_dashboard_overview_summarizes_existing_radar_state(monkeypatch):

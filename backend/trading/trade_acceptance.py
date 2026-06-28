@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
+from backend.ai_strategy.ai_service import ai_service
 from backend.ai_strategy.dynamic_trade_model import auto_trading_risk_model
 from backend.ai_strategy.openai_strategy_client import openai_strategy_client
 from backend.config import settings
@@ -27,7 +28,7 @@ class TradeAcceptanceRunner:
         before_closed_ids = {row.get("position_id") for row in position_registry.list_closed(limit=200)}
         item = self._acceptance_candidate()
         cyqnt = candidate_feature_enhancer.evaluate(item).asdict()
-        plan = await openai_strategy_client.generate(
+        plan = await ai_service.generate_strategy(
             item,
             {
                 "open_positions": 0,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.ai_strategy.openai_strategy_client import openai_strategy_client
+from backend.ai_strategy.ai_service import ai_service
 from backend.config import settings
 from backend.models import new_id, now_ms
 from backend.positions.position_manager import position_manager
@@ -115,7 +115,7 @@ class AITradeDirector:
         candidates: list,
         candidate_source: str,
     ) -> dict[str, Any]:
-        ai_status = openai_strategy_client.status(candidate_count=len(candidates), candidate_source=candidate_source)
+        ai_status = ai_service.status(candidate_count=len(candidates), candidate_source=candidate_source)
         return {
             "cycle_id": cycle_id,
             "ts_ms": now_ms(),
