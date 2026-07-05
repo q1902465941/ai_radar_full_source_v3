@@ -132,6 +132,7 @@ class DynamicSymbolStream:
         bucket = self._latest.setdefault(symbol, {})
         bucket[event_type] = data
         self._last_message_at = _now()
+        self._last_error = ""
 
     def _url(self, symbols: list[str]) -> str:
         if settings.binance_ws_url:

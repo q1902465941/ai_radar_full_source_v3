@@ -214,6 +214,8 @@ class TradeAcceptanceRunner:
     ) -> dict[str, Any]:
         open_ids = {p.position_id for p in position_registry.list_open()}
         closed_ids = {row.get("position_id") for row in position_registry.list_closed(limit=200)}
+        opened_during_test = (open_ids | closed_ids) - (before_open_ids | before_closed_ids)
+        open_test_positions_after = open_ids & opened_during_test
         return {
             "ok": all(stage["ok"] for stage in stages),
             "mode": "controlled_paper_acceptance",
@@ -221,7 +223,8 @@ class TradeAcceptanceRunner:
             "stages": stages,
             "result": result,
             "position_delta": {
-                "opened_during_test": list((open_ids | closed_ids) - (before_open_ids | before_closed_ids)),
+                "opened_during_test": sorted(opened_during_test),
+                "open_test_positions_after": sorted(open_test_positions_after),
                 "open_positions_after": len(open_ids),
                 "closed_positions_after": len(closed_ids),
             },

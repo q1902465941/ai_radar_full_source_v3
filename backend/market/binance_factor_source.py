@@ -449,8 +449,9 @@ class BinanceFactorSource:
         taker_buy_ratio, taker_sell_ratio = _taker_ratio(_as_list(taker_rows), kline_features)
         oi_change = self._open_interest_change(symbol, oi_now, _as_list(oi_hist))
         price = _first_positive(
-            premium.get("markPrice"),
             ticker.get("lastPrice"),
+            ticker.get("price"),
+            premium.get("markPrice"),
             kline_features.get("price"),
         )
 

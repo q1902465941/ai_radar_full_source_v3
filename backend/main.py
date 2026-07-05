@@ -348,10 +348,11 @@ async def _state_major_rows() -> list[dict[str, Any]]:
         snapshot = market_service.last_snapshots.get(sym)
         quote_failed = isinstance(quote, Exception)
         quote_price = 0.0 if quote_failed else float(getattr(quote, "price", 0.0) or 0.0)
+        snapshot_price = snapshot.price if snapshot and snapshot.price > 0 else 0.0
         rows.append({
             "symbol": sym,
             "label": label,
-            "price": snapshot.price if snapshot and snapshot.price > 0 else quote_price,
+            "price": quote_price if quote_price > 0 else snapshot_price,
             "change": snapshot.change_5m if snapshot else 0,
             "source": "quote_error" if quote_failed else getattr(quote, "source", "snapshot_cache" if snapshot else "unavailable"),
             "stale": True if quote_failed else bool(getattr(quote, "stale", False)),

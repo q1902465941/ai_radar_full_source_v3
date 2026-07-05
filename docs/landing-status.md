@@ -9,10 +9,9 @@ This document records the current evidence for landing
 
 - Local branch: `main`
 - Remote: `https://github.com/q1902465941/ai_radar_full_source_v3.git`
-- Previous main branch landing commits have been pushed to `origin/main`.
-- The Docker monitor restoration commit is local and pending push because
-  GitHub HTTPS access from this machine is currently failing with connection
-  resets/timeouts.
+- Main branch landing commits are pushed to `origin/main` when GitHub HTTPS is
+  reachable from this machine. Use `git status --short --branch` as the
+  authoritative local/remote divergence check.
 
 This file is the tracking record for the submission and Docker acceptance
 evidence.
@@ -30,9 +29,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop_local_stack.ps1
 Script paths: `scripts/verify_local.ps1`, `scripts/start_local_stack.ps1`,
 and `scripts/stop_local_stack.ps1`.
 
-Evidence from the latest run:
+Evidence from the latest local run:
 
-- Backend tests: `341 passed`
+- Backend tests: `360 passed`
 - Frontend tests: `5 files / 8 tests passed`
 - Frontend production build: passed
 - Backend smoke: `/api/v2/health` returned service `ai-radar-api`
@@ -138,6 +137,13 @@ monitoring site as the default browser surface and fixing mainnet market data:
 - Market data: `/api/state` reported `market_data_source=mainnet`; monitored
   BTC price drift versus Binance USD-M Futures mainnet public ticker stayed
   within the verification threshold.
+- Radar pricing: `scripts/verify_docker_stack.ps1` now waits for a fresh
+  `last_scan_id` before accepting `/api/radar`, then checks the first radar
+  symbols against Binance mainnet ticker data with a 1% default drift limit.
+- WebSocket ticker source: all-market ticker uses the Binance USD-M Futures
+  `/market/ws/!ticker@arr` routed path. Runtime evidence after rebuild showed
+  `refresh_source=ws_ticker`, ticker count above 600, `stale=false`, and no
+  WebSocket readiness blockers.
 - Radar scan: `/api/radar/scan-now` and `/api/radar` returned non-empty top50
   data with `market_refresh.degraded=false`.
 
@@ -168,6 +174,9 @@ Evidence from 2026-07-05:
 - Completed stages: scan candidate, cyqnt evidence, strategy plan, risk model,
   paper open, position manager, paper close, learning open recorded, and
   learning close recorded.
+- The Docker verifier checks `open_test_positions_after=[]`; a separate normal
+  paper position can still exist while the controlled acceptance position is
+  opened, closed, and recorded.
 
 ## Safety State
 

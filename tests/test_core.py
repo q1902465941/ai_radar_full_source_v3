@@ -188,6 +188,33 @@ def test_state_uses_realtime_quotes_for_major_prices_when_snapshots_missing(monk
     assert majors["BTCUSDT"]["stale"] is False
 
 
+def test_state_prefers_realtime_quote_over_cached_major_snapshot(monkeypatch):
+    market_service.last_snapshots = {
+        "BTCUSDT": MarketSnapshot("BTCUSDT", 1.0, 0.7, 0.8, 0.9, 1, 0, 0, 0.5, 0.5, 0, 0.1, 0.1)
+    }
+    monkeypatch.setattr(binance_rest, "last_public_source", "mainnet")
+
+    async def fake_price_quote(symbol_arg, side_arg=None):
+        price = 62661.9 if symbol_arg == "BTCUSDT" else 100.0
+        return PriceQuote(
+            symbol=symbol_arg,
+            price=price,
+            source="book_ticker_mid",
+            ts_ms=now_ms(),
+            age_seconds=0.0,
+            stale=False,
+        )
+
+    monkeypatch.setattr(market_service, "price_quote", fake_price_quote)
+
+    out = asyncio.run(main_module.state())
+    majors = {row["symbol"]: row for row in out["major"]}
+
+    assert majors["BTCUSDT"]["price"] == 62661.9
+    assert majors["BTCUSDT"]["change"] == 0.7
+    assert majors["BTCUSDT"]["source"] == "book_ticker_mid"
+
+
 def test_direction_short():
     s=MarketSnapshot("XUSDT",1,-1,-2,-3,2.5,1.0,0,0.3,0.7,-.2,.5,.1)
     assert direction(s)=="SHORT"
@@ -635,6 +662,33 @@ def test_binance_factor_source_builds_real_factor_snapshot(monkeypatch):
     assert btc.depth_imbalance > 0
     assert btc.atr_pct > 0
     assert 0 <= btc.wick_ratio <= 1
+
+
+def test_binance_factor_source_prefers_last_price_over_mark_price(monkeypatch):
+    monkeypatch.setattr(settings, "radar_exclude_major_symbols_from_anomaly", False)
+    monkeypatch.setattr(settings, "binance_symbol_limit", 1)
+    monkeypatch.setattr(settings, "binance_factor_concurrency", 1)
+    monkeypatch.setattr(settings, "binance_factor_ttl_seconds", 0)
+    monkeypatch.setattr(settings, "binance_use_open_interest_hist", False)
+    monkeypatch.setattr(settings, "binance_use_taker_ratio_endpoint", False)
+
+    class DivergedPriceClient(FakeBinanceMarketClient):
+        async def exchange_info(self):
+            return {"symbols": [_exchange_symbol_meta("BTCUSDT")]}
+
+        async def premium_index(self):
+            return [{"symbol": "BTCUSDT", "markPrice": "125", "lastFundingRate": "0.0001"}]
+
+        async def ticker_24hr(self, symbol=None):
+            return [{"symbol": "BTCUSDT", "lastPrice": "129", "quoteVolume": "2000000"}]
+
+    source = BinanceFactorSource(client=DivergedPriceClient())
+    snaps = __import__("asyncio").run(source.get_snapshots(force_refresh=True))
+
+    assert len(snaps) == 1
+    assert snaps[0].symbol == "BTCUSDT"
+    assert snaps[0].price == 129
+
 
 def test_binance_factor_source_keeps_snapshot_when_kline_missing(monkeypatch):
     monkeypatch.setattr(settings, "radar_exclude_major_symbols_from_anomaly", False)
@@ -2154,6 +2208,38 @@ def test_dynamic_symbol_stream_syncs_subscriptions_without_static_symbol_list():
     assert diag["active_symbols"] == ["TRBUSDT"]
     assert diag["active_count"] == 1
     assert diag["streams"] == ["aggTrade", "depth20@100ms", "kline_1m"]
+
+
+def test_dynamic_symbol_stream_clears_old_error_after_valid_message():
+    stream = DynamicSymbolStream(streams=("bookTicker",))
+    stream._last_error = "ConnectionClosedError:no close frame received or sent"
+
+    stream._remember_message('{"stream":"btcusdt@bookTicker","data":{"s":"BTCUSDT","b":"62700","a":"62701"}}')
+
+    diag = stream.diagnostics()
+    assert diag["last_error"] == ""
+    assert diag["last_message_age_seconds"] is not None
+    assert stream.latest("BTCUSDT")["bookTicker"]["s"] == "BTCUSDT"
+
+
+def test_binance_ticker_ws_url_uses_market_routed_futures_path(monkeypatch):
+    from backend.market.binance_ws_ticker import BinanceTickerStream
+
+    monkeypatch.setattr(settings, "binance_testnet", False)
+    monkeypatch.setattr(settings, "binance_ws_url", "")
+
+    ticker_stream = BinanceTickerStream()
+
+    assert ticker_stream._url() == "wss://fstream.binance.com/market/ws/!ticker@arr"
+
+
+def test_binance_ws_custom_url_override_is_preserved(monkeypatch):
+    from backend.market.binance_ws_ticker import BinanceTickerStream
+
+    monkeypatch.setattr(settings, "binance_ws_url", "wss://example.invalid/custom")
+
+    assert BinanceTickerStream()._url() == "wss://example.invalid/custom"
+    assert DynamicSymbolStream()._url(["BTCUSDT"]) == "wss://example.invalid/custom"
 
 
 def test_binance_factor_source_prioritizes_active_ticker_anomalies(monkeypatch):
@@ -6177,6 +6263,30 @@ def test_trade_acceptance_runner_verifies_real_paper_cycle(monkeypatch):
     finally:
         cleanup_symbol("ACCEPTUSDT")
         cleanup_acceptance_strategies()
+
+
+def test_trade_acceptance_report_separates_existing_open_positions(monkeypatch):
+    existing = SimpleNamespace(position_id="pos_existing")
+    monkeypatch.setattr(
+        "backend.trading.trade_acceptance.position_registry.list_open",
+        lambda: [existing],
+    )
+    monkeypatch.setattr(
+        "backend.trading.trade_acceptance.position_registry.list_closed",
+        lambda limit=200: [{"position_id": "pos_acceptance_closed"}],
+    )
+
+    report = trade_acceptance_runner._report(
+        [trade_acceptance_runner._stage("paper_close", True, {})],
+        {"pos_existing"},
+        set(),
+        result={"position_id": "pos_acceptance_closed"},
+    )
+
+    assert report["position_delta"]["open_positions_after"] == 1
+    assert report["position_delta"]["opened_during_test"] == ["pos_acceptance_closed"]
+    assert report["position_delta"]["open_test_positions_after"] == []
+
 
 def test_strategy_plan_schema_is_strict_for_codex_structured_output():
     schema = json.loads(Path("backend/ai_strategy/strategy_plan.schema.json").read_text(encoding="utf-8"))

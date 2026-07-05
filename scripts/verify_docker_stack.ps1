@@ -1,7 +1,8 @@
 param(
     [string]$MonitorBaseUrl = "http://127.0.0.1:8080",
     [string]$V2BaseUrl = "http://127.0.0.1:8002",
-    [int]$MaxPriceDriftPct = 5,
+    [double]$MaxPriceDriftPct = 5,
+    [double]$RadarMaxPriceDriftPct = 1.0,
     [string]$ApiToken = "",
     [switch]$SkipPaperAcceptance,
     [switch]$SkipExternalBinanceCheck
@@ -64,6 +65,44 @@ function Invoke-PostJson {
     return Invoke-RestMethod -Method Post -Uri $Url -Headers $headers -Body $json -ContentType "application/json" -TimeoutSec 120
 }
 
+function Assert-RadarPricesAgainstBinance {
+    param(
+        [object]$Radar,
+        [int]$SampleSize = 8
+    )
+    if ($SkipExternalBinanceCheck) {
+        return
+    }
+    $items = @($Radar.top50 | Select-Object -First $SampleSize)
+    $checked = 0
+    $worstSymbol = ""
+    $worstDrift = 0.0
+    foreach ($item in $items) {
+        $symbol = [string]$item.symbol
+        if ([string]::IsNullOrWhiteSpace($symbol)) {
+            continue
+        }
+        $monitorPrice = [double]$item.price
+        if ($monitorPrice -le 0) {
+            continue
+        }
+        $binance = Read-Json "https://fapi.binance.com/fapi/v1/ticker/price?symbol=$symbol"
+        $binancePrice = [double]$binance.price
+        if ($binancePrice -le 0) {
+            continue
+        }
+        $driftPct = [Math]::Abs(($monitorPrice - $binancePrice) / $binancePrice * 100.0)
+        if ($driftPct -gt $worstDrift) {
+            $worstDrift = $driftPct
+            $worstSymbol = $symbol
+        }
+        Assert-True ($driftPct -le $RadarMaxPriceDriftPct) "$symbol radar price drift $([Math]::Round($driftPct, 3))% exceeds $RadarMaxPriceDriftPct%"
+        $checked += 1
+    }
+    Assert-True ($checked -ge [Math]::Min(5, @($Radar.top50).Count)) "checked only $checked radar prices against Binance"
+    Write-Host "radar price drift ok: checked=$checked worst=$worstSymbol $([Math]::Round($worstDrift, 3))%"
+}
+
 Invoke-Step "compose config" {
     docker compose config --quiet
 }
@@ -103,6 +142,8 @@ if (-not $SkipExternalBinanceCheck) {
 }
 
 Invoke-Step "radar data present" {
+    $before = Read-Json "$MonitorBaseUrl/api/radar"
+    $beforeScanId = [string]$before.last_scan_id
     $scan = Invoke-RestMethod -Method Post -Uri "$MonitorBaseUrl/api/radar/scan-now" -TimeoutSec 15
     Assert-True ($scan.ok -eq $true) "scan-now did not return ok=true"
     $radar = $null
@@ -110,7 +151,10 @@ Invoke-Step "radar data present" {
         Start-Sleep -Seconds 1
         $radar = Read-Json "$MonitorBaseUrl/api/radar"
         $count = @($radar.top50).Count
-        if ($count -gt 0 -and -not $radar.scan_status.in_progress) {
+        $scanId = [string]$radar.last_scan_id
+        $scanFinished = $count -gt 0 -and -not $radar.scan_status.in_progress
+        $newScanReady = -not $scan.started -or [string]::IsNullOrWhiteSpace($beforeScanId) -or $scanId -ne $beforeScanId
+        if ($scanFinished -and $newScanReady) {
             break
         }
     }
@@ -119,6 +163,7 @@ Invoke-Step "radar data present" {
     Assert-True ($radar.scan_status.market_refresh.source -ne "") "radar market refresh source is empty"
     Assert-True ($radar.scan_status.market_refresh.degraded -eq $false) "radar market_refresh.degraded is true: $($radar.scan_status.market_refresh.error)"
     Assert-True ([string]::IsNullOrWhiteSpace($radar.scan_status.market_refresh.error)) "radar market refresh error is not empty: $($radar.scan_status.market_refresh.error)"
+    Assert-RadarPricesAgainstBinance -Radar $radar
 }
 
 if (-not $SkipPaperAcceptance) {
@@ -133,7 +178,8 @@ if (-not $SkipPaperAcceptance) {
         foreach ($required in @("strategy_plan", "risk_model", "paper_open", "position_manager_active", "paper_close", "learning_open_recorded", "learning_close_recorded")) {
             Assert-True ($stageMap[$required] -eq $true) "controlled paper stage '$required' did not pass"
         }
-        Assert-True ([int]$acceptance.position_delta.open_positions_after -eq 0) "controlled paper acceptance left open positions behind"
+        $openTestPositionsAfter = @($acceptance.position_delta.open_test_positions_after)
+        Assert-True ($openTestPositionsAfter.Count -eq 0) "controlled paper acceptance left its own positions open: $($openTestPositionsAfter -join ',')"
     }
 }
 

@@ -81,7 +81,7 @@ class BinanceTickerStream:
         if settings.binance_ws_url:
             return settings.binance_ws_url
         host = "stream.binancefuture.com" if settings.binance_testnet else "fstream.binance.com"
-        return f"wss://{host}/ws/!ticker@arr"
+        return f"wss://{host}/market/ws/!ticker@arr"
 
 
 def _host_of(url: str) -> str:
