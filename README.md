@@ -93,6 +93,16 @@ Check Docker Desktop and WSL prerequisites before Compose deployment:
 powershell -ExecutionPolicy Bypass -File .\scripts\check_docker_prereqs.ps1
 ```
 
+Run a local production-style stack without Docker:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_local_stack.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\stop_local_stack.ps1
+```
+
+Use `-BackendPort` and `-FrontendPort` when the defaults `8001` or `4173`
+are already occupied.
+
 Deployment smoke tests:
 
 ```bash

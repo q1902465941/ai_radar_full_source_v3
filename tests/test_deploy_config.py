@@ -64,3 +64,18 @@ def test_docker_prereq_script_reports_wsl_and_daemon_state():
     assert "docker info" in script
     assert "docker compose config --quiet" in script
     assert "WSL optional component" in script
+
+
+def test_local_stack_scripts_start_and_stop_production_style_services():
+    start_script = (ROOT / "scripts" / "start_local_stack.ps1").read_text(encoding="utf-8")
+    stop_script = (ROOT / "scripts" / "stop_local_stack.ps1").read_text(encoding="utf-8")
+
+    assert "run_v2.py" in start_script
+    assert "npm run build" in start_script
+    assert "vite" in start_script and "preview" in start_script
+    assert "/api/v2/health" in start_script
+    assert "local_stack.json" in start_script
+    assert "APP_PORT" in start_script
+    assert "local_stack.json" in stop_script
+    assert "Get-NetTCPConnection" in stop_script
+    assert "Stop-Process" in stop_script

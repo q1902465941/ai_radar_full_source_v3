@@ -39,9 +39,20 @@ npm ci
 npm run dev
 ```
 
+Production-style local stack without Docker:
+
+```powershell
+cd E:\ai_radar_full_source_v3
+powershell -ExecutionPolicy Bypass -File .\scripts\start_local_stack.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\stop_local_stack.ps1
+```
+
+If ports are occupied, pass `-BackendPort` and `-FrontendPort` to both scripts.
+
 Local URLs:
 
 - Frontend dev server: `http://127.0.0.1:5173`
+- Frontend local stack: `http://127.0.0.1:4173`
 - Backend health: `http://127.0.0.1:8001/api/v2/health`
 - Backend docs: `http://127.0.0.1:8001/api/v2/docs`
 
