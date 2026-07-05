@@ -88,6 +88,7 @@ class ExchangeReconciliation:
         for position in local_positions:
             stop_id, tp_id = self._expected_client_ids(position)
             expected_client_ids.update({stop_id, tp_id})
+            expected_client_ids.update(self._known_protection_client_ids(position))
             if not self._order_present(position.symbol, stop_id, position.exchange_stop_order, open_orders):
                 issues.append({
                     "code": "live_position_missing_stop_order",
@@ -183,6 +184,16 @@ class ExchangeReconciliation:
 
     def _expected_client_ids(self, position: Position) -> tuple[str, str]:
         return f"hy_sl_{position.strategy_id}"[:36], f"hy_tp_{position.strategy_id}"[:36]
+
+    def _known_protection_client_ids(self, position: Position) -> set[str]:
+        out: set[str] = set()
+        for order in (position.exchange_stop_order, position.exchange_tp_order):
+            if not isinstance(order, dict):
+                continue
+            client_id = str(order.get("clientOrderId") or order.get("origClientOrderId") or "")
+            if client_id:
+                out.add(client_id)
+        return out
 
     def _is_system_protection_client_id(self, client_id: str) -> bool:
         return client_id.startswith(("hy_sl_", "hy_tp_", "hy_slr_", "hy_tpr_"))

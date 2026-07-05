@@ -5,6 +5,9 @@ from backend.models import ExecutionPlan, Position, new_id, now_ms
 from backend.exchange.binance_futures import binance_futures
 from backend.positions.position_registry import position_registry
 from backend.storage.db import db
+from backend.trading.exchange_reconciliation import exchange_reconciliation
+from backend.trading.prg.readiness_engine import readiness_engine
+from backend.trading.prg.risk_acceptance import risk_acceptance
 from backend.trading.trade_economics import market_fill_price, stop_distance_pct, trade_fee, trade_notional
 
 
@@ -40,6 +43,7 @@ class LiveExecutor:
             raise RuntimeError("BINANCE_KEYS_MISSING")
         if not settings.live_use_test_order and not settings.attach_protection_orders:
             raise RuntimeError("PROTECTION_ORDERS_REQUIRED_FOR_REAL_ORDER")
+        self._assert_prg_live_allowed()
 
         await binance_futures.exchange_info()
         constraints = binance_futures.market_order_constraints(plan.symbol, plan.quantity, plan.entry_price)
@@ -261,6 +265,24 @@ class LiveExecutor:
             return
         if await binance_futures.position_side_dual():
             raise RuntimeError("BINANCE_HEDGE_MODE_UNSUPPORTED")
+
+    def _assert_prg_live_allowed(self) -> None:
+        if not (
+            settings.trade_mode == "live"
+            and settings.live_trading_enabled
+            and not settings.live_use_test_order
+        ):
+            return
+        from backend.trading.live_readiness import live_readiness
+
+        readiness = live_readiness.summary()
+        prg_report = readiness_engine.enforce(readiness_engine.metrics_from_readiness(readiness))
+        if not prg_report.get("allowed"):
+            raise RuntimeError(f"PRG_BLOCKED:{prg_report.get('reason')}")
+        risk_ok, risk_reason = risk_acceptance.verify_reconciliation_report(exchange_reconciliation.cached())
+        if not risk_ok:
+            settings.live_trading_enabled = False
+            raise RuntimeError(f"RISK_ACCEPTANCE_FAILED:{risk_reason}")
 
     def _record_unprotected_live_position(
         self,

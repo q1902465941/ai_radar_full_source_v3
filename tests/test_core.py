@@ -6537,6 +6537,22 @@ def test_production_acceptance_real_gate_keeps_other_readiness_blockers(monkeypa
     assert "learning_data_not_production_grade" in reason
 
 
+def _prg_pass_readiness(phases=None):
+    prg_metrics = {"sharpe": 1.2, "max_drawdown": 0.05, "winrate": 0.62, "profit_factor": 1.35}
+    return {
+        "prg": {
+            "score": 100,
+            "level": "FULL_LIVE_READY",
+            "allowed": True,
+            "mode": "FULL_LIVE",
+            "reason": "",
+            "metrics": prg_metrics,
+        },
+        "metrics": {"prg": prg_metrics},
+        "phases": phases or [{"name": "micro_live", "blockers": []}],
+    }
+
+
 def test_autotrader_real_live_guard_allows_supervised_enable_marker(monkeypatch):
     monkeypatch.setattr(settings, "trade_mode", "live")
     monkeypatch.setattr(settings, "live_trading_enabled", True)
@@ -6555,14 +6571,14 @@ def test_autotrader_real_live_guard_allows_supervised_enable_marker(monkeypatch)
     monkeypatch.setattr(
         live_readiness,
         "summary",
-        lambda: {
-            "phases": [
+        lambda: _prg_pass_readiness(
+            [
                 {
                     "name": "micro_live",
                     "blockers": [{"code": "live_trading_already_enabled", "stage": "all"}],
                 }
             ]
-        },
+        ),
     )
 
     ok, reason, _ = autotrader._real_live_execution_guard()
@@ -6605,14 +6621,14 @@ def test_autotrader_real_live_guard_requires_recent_real_order_acceptance(monkey
     monkeypatch.setattr(
         live_readiness,
         "summary",
-        lambda: {
-            "phases": [
+        lambda: _prg_pass_readiness(
+            [
                 {
                     "name": "micro_live",
                     "blockers": [{"code": "live_trading_already_enabled", "stage": "all"}],
                 }
             ]
-        },
+        ),
     )
 
     db.set_kv("production_acceptance.last_report", {"ok": False, "mode": "preflight", "finished_ms": now_ms()})
@@ -6799,6 +6815,7 @@ def test_live_executor_blocks_order_below_exchange_constraints(monkeypatch):
     monkeypatch.setattr(settings, "live_use_test_order", False)
     monkeypatch.setattr(settings, "attach_protection_orders", True)
     monkeypatch.setattr(binance_futures, "configured", lambda: True)
+    monkeypatch.setattr(live_readiness, "summary", lambda: _prg_pass_readiness())
     monkeypatch.setattr(
         binance_futures,
         "_symbol_filters",
@@ -6852,6 +6869,7 @@ def test_live_executor_blocks_real_order_when_account_is_hedge_mode(monkeypatch)
     monkeypatch.setattr(settings, "live_use_test_order", False)
     monkeypatch.setattr(settings, "attach_protection_orders", True)
     monkeypatch.setattr(binance_futures, "configured", lambda: True)
+    monkeypatch.setattr(live_readiness, "summary", lambda: _prg_pass_readiness())
 
     async def fake_exchange_info():
         return {}
@@ -6976,6 +6994,7 @@ def test_live_executor_cancels_attached_stop_after_take_profit_attach_failure(mo
     monkeypatch.setattr(settings, "live_use_test_order", False)
     monkeypatch.setattr(settings, "attach_protection_orders", True)
     monkeypatch.setattr(binance_futures, "configured", lambda: True)
+    monkeypatch.setattr(live_readiness, "summary", lambda: _prg_pass_readiness())
     cancel_calls = []
 
     async def fake_exchange_info():
@@ -7048,6 +7067,7 @@ def test_live_executor_records_unprotected_live_position_when_force_close_fails(
     monkeypatch.setattr(settings, "live_use_test_order", False)
     monkeypatch.setattr(settings, "attach_protection_orders", True)
     monkeypatch.setattr(binance_futures, "configured", lambda: True)
+    monkeypatch.setattr(live_readiness, "summary", lambda: _prg_pass_readiness())
 
     async def fake_exchange_info():
         return {}
@@ -7977,6 +7997,48 @@ def test_sensitive_config_post_accepts_valid_api_token(monkeypatch):
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert writes
+
+
+def test_strategy_alpha_api_exposes_status_and_run_cycle(monkeypatch):
+    from backend.main import app
+
+    calls = []
+
+    def fake_status():
+        return {
+            "ok": True,
+            "sample_source": "research_alpha",
+            "pool_size": 2,
+            "strategy_pool_score": 72.5,
+            "prg": {"score": 72.5, "level": "MICRO_LIVE_CANDIDATE", "allowed": False},
+        }
+
+    def fake_run_cycle(*, generation_size=20, mutation_size=5):
+        calls.append({"generation_size": generation_size, "mutation_size": mutation_size})
+        return {
+            "ok": True,
+            "run": {"stored_count": 3, "strategy_pool_score": 72.5},
+            "status": fake_status(),
+        }
+
+    monkeypatch.setattr(settings, "api_token", "test-token")
+    monkeypatch.setattr("backend.main.strategy_alpha_status", fake_status, raising=False)
+    monkeypatch.setattr("backend.main.run_strategy_alpha_cycle", fake_run_cycle, raising=False)
+    client = TestClient(app)
+
+    status = client.get("/api/strategy-alpha/status")
+    started = client.post(
+        "/api/strategy-alpha/run-cycle",
+        headers={"X-API-Token": "test-token"},
+        json={"generation_size": 2, "mutation_size": 1},
+    )
+
+    assert status.status_code == 200
+    assert status.json()["pool_size"] == 2
+    assert status.json()["prg"]["level"] == "MICRO_LIVE_CANDIDATE"
+    assert started.status_code == 200
+    assert started.json()["status"]["strategy_pool_score"] == 72.5
+    assert calls == [{"generation_size": 2, "mutation_size": 1}]
 
 
 def test_radar_scan_now_is_not_blocked_by_api_token_middleware(monkeypatch):

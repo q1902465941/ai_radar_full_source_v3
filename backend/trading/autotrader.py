@@ -28,6 +28,7 @@ from backend.storage.db import db
 from backend.trading.live_executor import live_executor
 from backend.trading.paper_executor import paper_executor
 from backend.trading.performance_guard import performance_guard
+from backend.trading.prg.readiness_engine import readiness_engine
 
 
 class AutoTrader:
@@ -1063,6 +1064,10 @@ class AutoTrader:
         if blockers:
             codes = [str(blocker.get("code")) for blocker in blockers if blocker.get("code")]
             return False, "live_readiness_blocked:" + ",".join(codes), readiness
+        prg_metrics = readiness_engine.metrics_from_readiness(readiness)
+        prg_report = readiness_engine.enforce(prg_metrics)
+        if not prg_report.get("allowed"):
+            return False, f"prg_blocked:{prg_report.get('reason')}", {"live_readiness": readiness, "prg": prg_report}
         acceptance = db.get_kv("production_acceptance.last_report", {}) or {}
         acceptance_evidence = {"live_readiness": readiness, "production_acceptance": acceptance}
         if not isinstance(acceptance, dict) or not acceptance.get("ok") or not (acceptance.get("production_acceptance") or {}).get("passed"):

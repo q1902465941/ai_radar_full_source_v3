@@ -11,8 +11,10 @@ from backend.market.market_service import market_service
 from backend.market.binance_rest import binance_rest
 from backend.positions.position_manager import position_manager
 from backend.positions.position_registry import position_registry
+from backend.strategy_alpha.registry import strategy_alpha_registry
 from backend.trading.exchange_reconciliation import exchange_reconciliation
 from backend.trading.performance_guard import performance_guard
+from backend.trading.prg.readiness_engine import readiness_engine
 
 
 EXCHANGE_RECONCILIATION_MAX_AGE_SECONDS = 90.0
@@ -32,11 +34,22 @@ class LiveReadiness:
         positions = position_manager.summary()
         open_positions = position_registry.list_open()
         exchange_status = exchange_reconciliation.cached()
+        strategy_pool_score = strategy_alpha_registry.strategy_pool_score()
+        prg_report = readiness_engine.gate({"strategy_pool_score": strategy_pool_score})
         blockers = self._blockers(performance, attribution, positions, open_positions, data_quality, exchange_status)
+        if not prg_report.get("allowed"):
+            blockers.append(
+                _block(
+                    "prg_not_micro_live_eligible",
+                    "micro_live",
+                    f"PRG score {prg_report.get('score')} is not micro-live eligible: {prg_report.get('reason') or prg_report.get('level')}",
+                )
+            )
         phases = self._phases(blockers)
         current_stage = self._current_stage(phases)
         return {
             "current_stage": current_stage,
+            "prg": prg_report,
             "paper_is_terminal": False,
             "instruction": (
                 "Paper is only the sample-collection layer. Graduation path is "
@@ -77,6 +90,11 @@ class LiveReadiness:
                     "attach_protection_orders": settings.attach_protection_orders,
                     "performance_guard_enabled": settings.auto_trading_use_performance_guard,
                     "max_open_positions": settings.max_open_positions,
+                },
+                "strategy_alpha": {
+                    "strategy_pool_score": strategy_pool_score,
+                    "pool_size": len(strategy_alpha_registry.list(limit=100)),
+                    "top": strategy_alpha_registry.top(limit=3),
                 },
             },
             "next_actions": self._next_actions(blockers, phases),

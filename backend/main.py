@@ -25,6 +25,7 @@ from backend.learning.radar_score_auditor import radar_score_auditor
 from backend.learning.radar_weight_calibrator import radar_weight_calibrator
 from backend.learning.trade_attributor import trade_attributor
 from backend.ai_strategy.strategy_qa import strategy_qa
+from backend.strategy_alpha.service import run_strategy_alpha_cycle, strategy_alpha_status
 from backend.radar.radar_engine import radar_engine
 from backend.positions.position_manager import position_manager
 from backend.positions.position_registry import position_registry
@@ -62,6 +63,11 @@ class EvolveRequest(BaseModel):
 class PaperRepairRequest(BaseModel):
     promote: bool = False
     run_once: bool = True
+
+
+class StrategyAlphaRunRequest(BaseModel):
+    generation_size: int = 20
+    mutation_size: int = 5
 
 
 class StrategyAskRequest(BaseModel):
@@ -570,6 +576,17 @@ async def api_performance():
 @app.get("/api/live-readiness")
 async def api_live_readiness():
     return live_readiness.summary()
+
+@app.get("/api/strategy-alpha/status")
+async def api_strategy_alpha_status():
+    return strategy_alpha_status()
+
+@app.post("/api/strategy-alpha/run-cycle")
+async def api_strategy_alpha_run_cycle(payload: StrategyAlphaRunRequest):
+    return run_strategy_alpha_cycle(
+        generation_size=payload.generation_size,
+        mutation_size=payload.mutation_size,
+    )
 
 @app.get("/api/learning/memory")
 async def api_learning_memory():
