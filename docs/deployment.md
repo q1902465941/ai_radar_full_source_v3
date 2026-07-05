@@ -54,9 +54,9 @@ If ports are occupied, pass `-BackendPort` and `-FrontendPort` to both scripts.
 Local URLs:
 
 - Frontend dev server: `http://127.0.0.1:5173`
-- Frontend local stack: `http://127.0.0.1:4173`
-- Backend health: `http://127.0.0.1:8001/api/v2/health`
-- Backend docs: `http://127.0.0.1:8001/api/v2/docs`
+- Frontend local stack: `http://127.0.0.1:4183`
+- Backend health: `http://127.0.0.1:8011/api/v2/health`
+- Backend docs: `http://127.0.0.1:8011/api/v2/docs`
 
 ## Docker Compose
 
@@ -90,10 +90,23 @@ Services:
 Compose runs:
 
 1. `python -m alembic upgrade head`
-2. Legacy monitoring app `backend.main:app` on port `8001`
+2. Legacy monitoring app `backend.main:app` on port `8001` with one worker,
+   because it owns background scan loops
 3. v2 API app `backend.app.main:app` on port `8002`
 4. Nginx on port `8080`, proxying the monitoring site by default and
    `/api/v2/` to the v2 API
+
+Compose passes market runtime settings from `.env`. The deployment default is
+Binance USD-M Futures public mainnet data, not mock or testnet:
+
+```env
+MARKET_DATA_MODE=binance
+BINANCE_TESTNET=false
+BINANCE_MARKET_FALLBACK_TESTNET=false
+AI_ENABLED=false
+AI_STRATEGY_PROVIDER=rule
+REQUIRE_CODEX_STRATEGY_FOR_ENTRY=false
+```
 
 Persistent mounts:
 
@@ -143,6 +156,28 @@ curl http://127.0.0.1:8002/api/v2/health
 curl http://127.0.0.1:8080/api/v2/health
 docker compose ps
 ```
+
+Run the full Docker landing verification:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify_docker_stack.ps1
+```
+
+Verify the controlled paper closed loop after the stack is healthy:
+
+```powershell
+$token = (Select-String .env '^API_TOKEN=').Line -replace '^API_TOKEN=',''
+Invoke-RestMethod -Method Post `
+  -Headers @{ 'X-API-Token' = $token } `
+  -Uri 'http://127.0.0.1:8080/api/trade-director/acceptance/paper-cycle'
+```
+
+Expected acceptance properties:
+
+- `ok=true`
+- `real_order_allowed=false`
+- `paper_open`, `paper_close`, `learning_open_recorded`, and
+  `learning_close_recorded` stages are all true
 
 Expected v2 health response:
 

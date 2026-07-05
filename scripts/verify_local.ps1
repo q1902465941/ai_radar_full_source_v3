@@ -1,7 +1,9 @@
 param(
     [switch]$SkipBackendTests,
     [switch]$SkipFrontendTests,
-    [switch]$SkipSmoke
+    [switch]$SkipSmoke,
+    [int]$BackendSmokePort = 8011,
+    [int]$FrontendSmokePort = 4183
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,16 +61,24 @@ if (-not $SkipFrontendTests) {
 
 if (-not $SkipSmoke) {
     Invoke-Step "backend /api/v2/health smoke" {
+        Stop-Listeners -Ports @($BackendSmokePort)
         $stdout = Join-Path $env:TEMP "ai-radar-v2-smoke.out.log"
         $stderr = Join-Path $env:TEMP "ai-radar-v2-smoke.err.log"
         Remove-Item -ErrorAction SilentlyContinue $stdout, $stderr
-        $server = Start-Process -FilePath $Python -ArgumentList "run_v2.py" -WorkingDirectory $RepoRoot -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $server = $null
+        $originalAppPort = $env:APP_PORT
+        $env:APP_PORT = [string]($BackendSmokePort - 1)
+        try {
+            $server = Start-Process -FilePath $Python -ArgumentList "run_v2.py" -WorkingDirectory $RepoRoot -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        } finally {
+            $env:APP_PORT = $originalAppPort
+        }
         try {
             $healthy = $false
             for ($i = 0; $i -lt 40; $i++) {
                 Start-Sleep -Milliseconds 750
                 try {
-                    $body = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/v2/health" -TimeoutSec 3
+                    $body = Invoke-RestMethod -Uri "http://127.0.0.1:$BackendSmokePort/api/v2/health" -TimeoutSec 3
                     if ($body.ok -eq $true -and $body.service -eq "ai-radar-api") {
                         $healthy = $true
                         break
@@ -85,25 +95,26 @@ if (-not $SkipSmoke) {
                 throw "backend health smoke failed"
             }
         } finally {
-            if (-not $server.HasExited) {
+            if ($server -and -not $server.HasExited) {
                 Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
                 $server.WaitForExit()
             }
+            Stop-Listeners -Ports @($BackendSmokePort)
         }
     }
 
     Invoke-Step "frontend vite preview smoke" {
-        Stop-Listeners -Ports @(4173)
+        Stop-Listeners -Ports @($FrontendSmokePort)
         $stdout = Join-Path $env:TEMP "ai-radar-frontend-preview.out.log"
         $stderr = Join-Path $env:TEMP "ai-radar-frontend-preview.err.log"
         Remove-Item -ErrorAction SilentlyContinue $stdout, $stderr
-        $preview = Start-Process -FilePath "npm.cmd" -ArgumentList @("exec", "vite", "--", "preview", "--host", "127.0.0.1", "--port", "4173") -WorkingDirectory $FrontendDir -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $preview = Start-Process -FilePath "npm.cmd" -ArgumentList @("exec", "vite", "--", "preview", "--host", "127.0.0.1", "--port", "$FrontendSmokePort") -WorkingDirectory $FrontendDir -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         try {
             $served = $false
             for ($i = 0; $i -lt 30; $i++) {
                 Start-Sleep -Milliseconds 500
                 try {
-                    $html = Invoke-WebRequest -Uri "http://127.0.0.1:4173/" -TimeoutSec 3 | Select-Object -ExpandProperty Content
+                    $html = Invoke-WebRequest -Uri "http://127.0.0.1:$FrontendSmokePort/" -TimeoutSec 3 | Select-Object -ExpandProperty Content
                     if ($html -match '<div id="root"></div>') {
                         $served = $true
                         break
@@ -123,7 +134,7 @@ if (-not $SkipSmoke) {
             if (-not $preview.HasExited) {
                 Stop-Process -Id $preview.Id -Force -ErrorAction SilentlyContinue
             }
-            Stop-Listeners -Ports @(4173)
+            Stop-Listeners -Ports @($FrontendSmokePort)
         }
     }
 }

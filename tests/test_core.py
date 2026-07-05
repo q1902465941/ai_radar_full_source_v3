@@ -154,6 +154,40 @@ def default_disable_event_calibration(monkeypatch):
     db.set_kv("production_acceptance.last_report", previous_acceptance)
     db.set_kv("live_executor.trading_freeze", previous_trading_freeze)
 
+
+def test_state_uses_realtime_quotes_for_major_prices_when_snapshots_missing(monkeypatch):
+    market_service.last_snapshots = {}
+    monkeypatch.setattr(binance_rest, "last_public_source", "mainnet")
+
+    async def fake_price_quote(symbol_arg, side_arg=None):
+        prices = {
+            "BTCUSDT": 62661.9,
+            "ETHUSDT": 3100.5,
+            "BNBUSDT": 720.25,
+            "SOLUSDT": 182.75,
+        }
+        return PriceQuote(
+            symbol=symbol_arg,
+            price=prices[symbol_arg],
+            source="book_ticker_mid",
+            ts_ms=now_ms(),
+            age_seconds=0.0,
+            stale=False,
+            bid=prices[symbol_arg] - 0.01,
+            ask=prices[symbol_arg] + 0.01,
+        )
+
+    monkeypatch.setattr(market_service, "price_quote", fake_price_quote)
+
+    out = asyncio.run(main_module.state())
+    majors = {row["symbol"]: row for row in out["major"]}
+
+    assert out["market_data_source"] == "mainnet"
+    assert majors["BTCUSDT"]["price"] == 62661.9
+    assert majors["BTCUSDT"]["source"] == "book_ticker_mid"
+    assert majors["BTCUSDT"]["stale"] is False
+
+
 def test_direction_short():
     s=MarketSnapshot("XUSDT",1,-1,-2,-3,2.5,1.0,0,0.3,0.7,-.2,.5,.1)
     assert direction(s)=="SHORT"
@@ -2126,11 +2160,24 @@ def test_binance_factor_source_does_not_cut_active_pool_to_base_symbol_limit(mon
     assert len(selected) == 3
 
 
-def test_binance_factor_source_scales_concurrency_for_large_active_pool(monkeypatch):
+def test_binance_factor_source_filters_stale_active_symbols_not_in_current_market_rows(monkeypatch):
+    monkeypatch.setattr(settings, "binance_symbol_limit", 2)
+    source = BinanceFactorSource(client=FakeBinanceMarketClient())
+
+    selected = source._prioritize_active_symbols(
+        ["BASE1USDT", "BASE2USDT"],
+        ["STALEUSDT", "HOTUSDT"],
+        valid_symbols={"BASE1USDT", "BASE2USDT", "HOTUSDT"},
+    )
+
+    assert selected == ["HOTUSDT", "BASE1USDT"]
+
+
+def test_binance_factor_source_respects_configured_concurrency_for_large_active_pool(monkeypatch):
     monkeypatch.setattr(settings, "binance_factor_concurrency", 4)
     source = BinanceFactorSource(client=FakeBinanceMarketClient())
 
-    assert source._effective_concurrency(80) >= 12
+    assert source._effective_concurrency(80) == 4
 
 
 def test_binance_factor_source_preserves_completed_diagnostics_while_refreshing(monkeypatch):
@@ -4137,6 +4184,69 @@ def test_ai_strategy_feedback_records_open_ai_plan(monkeypatch):
     assert stored["filters"]["cyqnt_reference"]["estimated_win_rate"] == stored["last_cyqnt_feature"]["estimated_win_rate"]
 
 
+def test_ai_strategy_feedback_records_local_rule_paper_loop(monkeypatch):
+    store = {}
+
+    def save_strategy(strategy):
+        store[strategy["strategy_id"]] = dict(strategy)
+        return store[strategy["strategy_id"]]
+
+    monkeypatch.setattr(strategy_registry, "get", lambda strategy_id: store.get(strategy_id))
+    monkeypatch.setattr(strategy_registry, "save", save_strategy)
+
+    item = high_quality_item(symbol="RULEFEEDBACKUSDT", side="LONG", price=100)
+    plan = rule_strategy_generator.generate_probe(item)
+    plan.strategy_id = "rule_feedback_closed"
+    plan.raw = {**plan.raw, "provider": "rule", "model": "local_rule_strategy"}
+    position = feedback_position(plan.strategy_id, item.symbol, position_id="pos_rule_feedback_closed")
+
+    opened = ai_strategy_feedback.record_open(
+        plan=plan,
+        item=item,
+        exec_plan=feedback_exec_plan(plan),
+        position=position,
+        candidate_source="acceptance_controlled_paper_cycle",
+        paper_validation=True,
+    )
+    closed = ClosedPosition(
+        position_id=position.position_id,
+        strategy_id=plan.strategy_id,
+        symbol=item.symbol,
+        side="LONG",
+        entry_price=100,
+        exit_price=103,
+        quantity=1,
+        margin=20,
+        pnl=2.4,
+        roi=12,
+        close_reason="ACCEPTANCE_TP2",
+        score_at_entry=item.score,
+        open_time=position.open_time,
+        close_time=position.open_time + 120000,
+        source_signal_id="scan_rule_feedback_closed",
+        notional=100,
+        gross_pnl=3,
+        fee=0.08,
+        risk_usdt=1,
+        risk_pct=1,
+        strategy_contract=plan.raw["strategy_contract"],
+        mfe=2.8,
+        mae=-0.2,
+        mfe_r=2.8,
+        mae_r=-0.2,
+        hold_time_ms=120000,
+    )
+    closed_out = ai_strategy_feedback.record_close(closed)
+    stored = store[plan.strategy_id]
+
+    assert opened["recorded"] is True
+    assert closed_out["recorded"] is True
+    assert stored["source"] == "ai_generated_rule"
+    assert stored["provider"] == "rule"
+    assert stored["metrics"]["trades"] == 1
+    assert stored["forward"]["samples"][0]["close_reason"] == "ACCEPTANCE_TP2"
+
+
 def test_ai_strategy_feedback_records_decision_observation_without_trade_sample():
     symbol = "AIOBSUSDT"
     with db.conn() as conn:
@@ -4486,6 +4596,100 @@ def test_paper_loop_start_guard_allows_recovery_probe_sampling(monkeypatch):
     assert ok
     assert reason == "paper_recovery_sampling"
     assert report["recovery_mode"] is True
+
+
+def test_paper_repair_configures_codex_optional_for_controlled_paper(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(settings, "require_codex_strategy_for_entry", True)
+    monkeypatch.setattr(main_module, "update_env_values", lambda _path, values: captured.update(values))
+    monkeypatch.setattr(strategy_evolver, "evolve", lambda use_codex, promote: {"ok": True, "use_codex": use_codex, "promote": promote})
+
+    out = asyncio.run(main_module.api_learning_paper_repair(main_module.PaperRepairRequest(run_once=False)))
+
+    assert captured["LIVE_TRADING_ENABLED"] == "false"
+    assert captured["AI_ENABLED"] == "false"
+    assert captured["AI_STRATEGY_PROVIDER"] == "rule"
+    assert captured["REQUIRE_CODEX_STRATEGY_FOR_ENTRY"] == "false"
+    assert settings.live_trading_enabled is False
+    assert settings.ai_enabled is False
+    assert settings.ai_strategy_provider == "rule"
+    assert settings.require_codex_strategy_for_entry is False
+    assert out["verify"] is None
+
+
+def test_rule_strategy_provider_generates_local_paper_plan_without_external_ai(monkeypatch):
+    item = high_quality_item(symbol="LOCALRULEUSDT", side="LONG", price=100)
+    item.score = 88
+    item.fund_confirm_count = 3
+    monkeypatch.setattr(settings, "ai_enabled", False)
+    monkeypatch.setattr(settings, "ai_strategy_provider", "rule")
+    monkeypatch.setattr(settings, "require_codex_strategy_for_entry", False)
+    monkeypatch.setattr(settings, "ai_position_review_enabled", False)
+    position_registry.open.clear()
+
+    plan = asyncio.run(
+        openai_strategy_client.generate(
+            item,
+            {"candidate_selection": {"paper_probe": True, "paper_validation": True}},
+        )
+    )
+
+    assert plan.action == "OPEN_LONG"
+    assert plan.raw["provider"] == "rule"
+    assert plan.raw["model"] == "local_rule_strategy"
+    assert plan.raw["local_rule_fallback"] is True
+    assert plan.raw["paper_probe"] is True
+
+
+def test_rule_strategy_acceptance_mode_bypasses_open_position_capacity_guard(monkeypatch):
+    item = high_quality_item(symbol="RULEACCEPTUSDT", side="LONG", price=100)
+    item.score = 88
+    item.fund_confirm_count = 3
+    monkeypatch.setattr(settings, "ai_enabled", False)
+    monkeypatch.setattr(settings, "ai_strategy_provider", "rule")
+    monkeypatch.setattr(settings, "require_codex_strategy_for_entry", False)
+    monkeypatch.setattr(settings, "ai_position_review_enabled", True)
+    monkeypatch.setattr(settings, "max_open_positions", 1)
+    position_registry.open.clear()
+    position_registry.open["existing-paper"] = object()
+
+    try:
+        guarded = asyncio.run(openai_strategy_client.generate(item, {"candidate_selection": {"paper_probe": True}}))
+        acceptance = asyncio.run(
+            openai_strategy_client.generate(
+                item,
+                {"candidate_selection": {"paper_probe": True, "acceptance_mode": True}},
+            )
+        )
+    finally:
+        position_registry.open.clear()
+
+    assert guarded.action == "WAIT"
+    assert guarded.raw["provider"] == "local_position_priority_guard"
+    assert acceptance.action == "OPEN_LONG"
+    assert acceptance.raw["provider"] == "rule"
+
+
+def test_legacy_startup_initializes_structured_database(monkeypatch):
+    calls = []
+    scheduled = []
+    monkeypatch.setattr(main_module, "init_db", lambda: calls.append("init_db"))
+    monkeypatch.setattr(main_module, "start_universal_anomaly_auto_train_thread", lambda: None)
+    monkeypatch.setattr(main_module.universal_anomaly_trainer, "activate_latest", lambda: None)
+    monkeypatch.setattr(settings, "market_data_mode", "mock")
+
+    def fake_create_task(coro):
+        coro.close()
+        scheduled.append(coro)
+        return object()
+
+    monkeypatch.setattr(main_module.asyncio, "create_task", fake_create_task)
+
+    asyncio.run(main_module.startup())
+
+    assert calls == ["init_db"]
+    assert len(scheduled) == 2
+
 
 def test_paper_top_recovery_uses_paper_threshold_when_live_disabled(monkeypatch):
     item = high_quality_item(symbol="PAPERRECOVERYUSDT", side="LONG", price=100)

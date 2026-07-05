@@ -78,6 +78,18 @@ Open:
 Compose mounts `./data` and `./logs` for persistent runtime state. Secrets
 must stay in `.env`; `.env` is ignored by git.
 
+Docker Compose passes market runtime settings from `.env`. The landing default
+is Binance USD-M Futures public mainnet data:
+
+```env
+MARKET_DATA_MODE=binance
+BINANCE_TESTNET=false
+BINANCE_MARKET_FALLBACK_TESTNET=false
+AI_ENABLED=false
+AI_STRATEGY_PROVIDER=rule
+REQUIRE_CODEX_STRATEGY_FOR_ENTRY=false
+```
+
 ## Safety Defaults
 
 The default configuration is not live trading:
@@ -130,7 +142,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_local_stack.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\stop_local_stack.ps1
 ```
 
-Use `-BackendPort` and `-FrontendPort` when the defaults `8001` or `4173`
+Use `-BackendPort` and `-FrontendPort` when the defaults `8011` or `4183`
 are already occupied.
 
 Deployment smoke tests:
@@ -140,5 +152,22 @@ curl http://127.0.0.1:8080/radar
 curl http://127.0.0.1:8080/api/state
 curl http://127.0.0.1:8002/api/v2/health
 ```
+
+Full Docker landing verification:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify_docker_stack.ps1
+```
+
+Controlled paper closed-loop acceptance:
+
+```powershell
+$token = (Select-String .env '^API_TOKEN=').Line -replace '^API_TOKEN=',''
+Invoke-RestMethod -Method Post `
+  -Headers @{ 'X-API-Token' = $token } `
+  -Uri 'http://127.0.0.1:8080/api/trade-director/acceptance/paper-cycle'
+```
+
+The acceptance response should have `ok=true` and `real_order_allowed=false`.
 
 See `docs/deployment.md` for the full deployment checklist and rollback path.

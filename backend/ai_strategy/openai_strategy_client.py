@@ -3,21 +3,26 @@ from backend.config import settings
 from backend.models import RadarItem, StrategyPlan, new_id
 from backend.ai_strategy.codex_cli_strategy_client import codex_cli_strategy_client
 from backend.ai_strategy.deepseek_strategy_client import deepseek_strategy_client
+from backend.ai_strategy.rule_strategy import rule_strategy_generator
 from backend.positions.position_registry import position_registry
 
 SYSTEM_PROMPT = """你是交易策略生成模块。只能输出合法JSON，不要Markdown，不要解释。若条件不足，action=WAIT。LONG必须 sl < entry < tp1 < tp2。SHORT必须 tp2 < tp1 < entry < sl。reason少于80中文字符。"""
 
 class OpenAIStrategyClient:
     async def generate(self, item: RadarItem, position_context: dict | None = None) -> StrategyPlan:
-        if _position_manager_priority() or _capacity_full():
+        provider = _provider()
+        acceptance_mode = _acceptance_mode(position_context)
+        if not acceptance_mode and (_position_manager_priority() or _capacity_full()):
             return _position_priority_wait(item)
+        if settings.require_codex_strategy_for_entry and provider != "codex_cli":
+            return _ai_strategy_wait(item, f"codex_required_provider_{provider}")
+        if provider == "rule":
+            return _rule_strategy_plan(item, position_context)
         if not settings.ai_enabled:
             return _ai_strategy_wait(item, "ai_disabled")
-        if settings.require_codex_strategy_for_entry and settings.ai_strategy_provider != "codex_cli":
-            return _ai_strategy_wait(item, f"codex_required_provider_{settings.ai_strategy_provider}")
-        if settings.ai_strategy_provider == "deepseek":
+        if provider == "deepseek":
             return await deepseek_strategy_client.generate(item, position_context)
-        if settings.ai_strategy_provider == "codex_cli":
+        if provider == "codex_cli":
             return await codex_cli_strategy_client.generate(item, position_context)
         if not settings.openai_api_key:
             return _ai_strategy_wait(item, "openai_unimplemented_or_key_missing")
@@ -25,19 +30,21 @@ class OpenAIStrategyClient:
         return _ai_strategy_wait(item, "openai_provider_unimplemented")
 
     def status(self, *, candidate_count: int = 0, candidate_source: str = "") -> dict:
-        provider = settings.ai_strategy_provider
+        provider = _provider()
         position_priority = _position_manager_priority()
         capacity_full = _capacity_full()
         if position_priority:
             not_invoked_reason = "open_position_manager_priority"
         elif capacity_full:
             not_invoked_reason = "capacity_full"
-        elif not settings.ai_enabled:
-            not_invoked_reason = "ai_disabled"
         elif candidate_count <= 0:
             not_invoked_reason = "candidate_filter_empty_before_ai"
         elif settings.require_codex_strategy_for_entry and provider != "codex_cli":
             not_invoked_reason = f"codex_required_provider_{provider}"
+        elif provider == "rule":
+            not_invoked_reason = ""
+        elif not settings.ai_enabled:
+            not_invoked_reason = "ai_disabled"
         elif provider not in {"codex_cli", "deepseek"}:
             not_invoked_reason = f"provider_{provider}_uses_local_or_unimplemented_fallback"
         else:
@@ -48,9 +55,14 @@ class OpenAIStrategyClient:
             "candidate_source": candidate_source,
             "candidate_count_before_ai": candidate_count,
             "will_invoke_for_current_candidates": bool(
-                settings.ai_enabled
-                and (provider == "codex_cli" or (provider == "deepseek" and not settings.require_codex_strategy_for_entry))
+                (provider == "rule" or settings.ai_enabled)
+                and (
+                    provider == "rule"
+                    or provider == "codex_cli"
+                    or (provider == "deepseek" and not settings.require_codex_strategy_for_entry)
+                )
                 and candidate_count > 0
+                and not (settings.require_codex_strategy_for_entry and provider != "codex_cli")
                 and not position_priority
                 and not capacity_full
             ),
@@ -58,6 +70,30 @@ class OpenAIStrategyClient:
             "codex_cli": codex_cli_strategy_client.status(),
             "deepseek": deepseek_strategy_client.status(),
         }
+
+def _provider() -> str:
+    return str(settings.ai_strategy_provider or "rule").strip().lower()
+
+def _acceptance_mode(position_context: dict | None = None) -> bool:
+    selection = (position_context or {}).get("candidate_selection") or {}
+    return bool(selection.get("acceptance_mode"))
+
+def _rule_strategy_plan(item: RadarItem, position_context: dict | None = None) -> StrategyPlan:
+    selection = (position_context or {}).get("candidate_selection") or {}
+    use_probe = bool(
+        selection.get("paper_probe")
+        or selection.get("paper_validation")
+        or selection.get("acceptance_mode")
+    )
+    plan = rule_strategy_generator.generate_probe(item) if use_probe else rule_strategy_generator.generate(item)
+    plan.raw = {
+        **(plan.raw or {}),
+        "provider": "rule",
+        "model": "local_rule_strategy",
+        "local_rule_fallback": True,
+        "ai_enabled": bool(settings.ai_enabled),
+    }
+    return plan
 
 def _position_manager_priority() -> bool:
     return bool(settings.ai_position_review_enabled and position_registry.list_open())

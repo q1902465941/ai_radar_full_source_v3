@@ -76,7 +76,11 @@ class BinanceFactorSource:
                 return self._cached_or_empty("exchange_info_unavailable")
             active_symbols = self._discover_active_candidates(premiums, tickers)
             symbols = self._select_symbols(premiums, tickers)
-            symbols = self._prioritize_active_symbols(symbols, active_symbols)
+            symbols = self._prioritize_active_symbols(
+                symbols,
+                active_symbols,
+                valid_symbols=set(premiums) & set(tickers),
+            )
             self.current_symbol_count = len(symbols)
             if not symbols:
                 return self._cached_or_empty("no_symbols_selected")
@@ -260,14 +264,22 @@ class BinanceFactorSource:
         dynamic_symbol_stream.sync(active_symbols, now=now)
         return active_symbols
 
-    def _prioritize_active_symbols(self, symbols: list[str], active_symbols: list[str]) -> list[str]:
+    def _prioritize_active_symbols(
+        self,
+        symbols: list[str],
+        active_symbols: list[str],
+        valid_symbols: set[str] | None = None,
+    ) -> list[str]:
         if not active_symbols:
             return symbols
+        current_valid = set(valid_symbols or [])
         base_limit = max(1, int(settings.binance_symbol_limit or 1))
         active_limit = max(1, int(settings.radar_active_coin_max_symbols or len(active_symbols)))
         limit = max(base_limit, min(len(active_symbols), active_limit))
         out = []
         for symbol in [*active_symbols, *symbols]:
+            if current_valid and symbol not in current_valid:
+                continue
             if symbol not in out:
                 out.append(symbol)
             if len(out) >= limit:
@@ -275,15 +287,11 @@ class BinanceFactorSource:
         return out
 
     def _effective_concurrency(self, symbol_count: int) -> int:
-        base = max(1, int(settings.binance_factor_concurrency or 1))
+        configured = max(1, int(settings.binance_factor_concurrency or 1))
         count = max(0, int(symbol_count or 0))
-        if count >= 60:
-            scaled = min(24, max(12, math.ceil(count / 5)))
-            return max(base, scaled)
-        if count >= 24:
-            scaled = min(12, max(8, math.ceil(count / 4)))
-            return max(base, scaled)
-        return base
+        if count <= 0:
+            return 1
+        return min(configured, count)
 
     def _select_symbols(self, premiums: dict[str, dict[str, Any]], tickers: dict[str, dict[str, Any]]) -> list[str]:
         volume_ranked: list[tuple[str, float]] = []

@@ -1,8 +1,8 @@
 param(
     [switch]$SkipBuild,
     [switch]$ForceStop,
-    [int]$BackendPort = 8001,
-    [int]$FrontendPort = 4173
+    [int]$BackendPort = 8011,
+    [int]$FrontendPort = 4183
 )
 
 $ErrorActionPreference = "Stop"

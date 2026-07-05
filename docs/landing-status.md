@@ -76,6 +76,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check_docker_prereqs.ps1
 
 Script path: `scripts/check_docker_prereqs.ps1`.
 
+Docker landing verification script: `scripts/verify_docker_stack.ps1`.
+
 Resolved machine-level issue:
 
 - The prior WSL optional component blocker was cleared by running the helper,
@@ -116,7 +118,7 @@ docker compose up --build -d
 ```
 
 Docker Compose evidence from 2026-07-05 after restoring the detailed
-monitoring site as the default browser surface:
+monitoring site as the default browser surface and fixing mainnet market data:
 
 - `docker compose up --build -d`: completed.
 - Backend container: `healthy`, published `0.0.0.0:8001->8001/tcp`,
@@ -132,6 +134,40 @@ monitoring site as the default browser surface:
 - Browser smoke: `http://127.0.0.1:8080/` redirects to `/radar`, renders the
   legacy `猎妖人 AI Radar` monitoring page, includes `AI RADAR SYSTEM`, and no
   longer includes `AI Radar Control Center`.
+- Docker landing verification: `scripts/verify_docker_stack.ps1` completed.
+- Market data: `/api/state` reported `market_data_source=mainnet`; monitored
+  BTC price drift versus Binance USD-M Futures mainnet public ticker stayed
+  within the verification threshold.
+- Radar scan: `/api/radar/scan-now` and `/api/radar` returned non-empty top50
+  data with `market_refresh.degraded=false`.
+
+## Controlled Paper Closed Loop
+
+The current Docker runtime is configured for local rule-based paper sampling,
+not Codex-required entry:
+
+```env
+AI_ENABLED=false
+AI_STRATEGY_PROVIDER=rule
+REQUIRE_CODEX_STRATEGY_FOR_ENTRY=false
+LIVE_TRADING_ENABLED=false
+```
+
+Evidence from 2026-07-05:
+
+- `/api/system/readiness` status: `DEGRADED`, not `BLOCKED`.
+- Codex entry gate: `required_for_entry=false`.
+- Paper loop guard: `ok=true`, reason `paper_closed_loop_sampling`.
+- Codex-related wait/paper-entry blockers: none.
+- If a normal paper position is already open, readiness can still report
+  `ai_not_invoked` or `open_position_exists`; that is a capacity/position
+  management wait state, not a Codex or market-data startup blocker.
+- Controlled paper acceptance endpoint:
+  `/api/trade-director/acceptance/paper-cycle`.
+- Acceptance result: `ok=true`, `real_order_allowed=false`.
+- Completed stages: scan candidate, cyqnt evidence, strategy plan, risk model,
+  paper open, position manager, paper close, learning open recorded, and
+  learning close recorded.
 
 ## Safety State
 
@@ -147,8 +183,15 @@ ATTACH_PROTECTION_ORDERS=true
 Live order paths remain guarded by live readiness, PRG, exchange
 reconciliation, production acceptance, and protection-order checks.
 
-## Remaining To Land Fully
+## Remaining To Graduate Beyond Paper
 
-No known landing blockers remain. If the local network continues to block the
-official Docker Hub endpoints, use the documented base image overrides before
-running `docker compose up --build -d`.
+The runnable paper closed loop is now landed. Full live graduation is still
+blocked by readiness conditions that should not be bypassed:
+
+- Learning data is not production-grade yet.
+- Closed paper/live sample count is still low for live readiness.
+- Paper win rate, recent win rate, and PnL gates still require more evidence.
+- Exchange reconciliation and PRG live eligibility still need clean evidence.
+
+If the local network continues to block the official Docker Hub endpoints, use
+the documented base image overrides before running `docker compose up --build -d`.

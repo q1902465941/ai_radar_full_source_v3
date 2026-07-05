@@ -48,6 +48,7 @@ from backend.radar.universal_anomaly_trainer import universal_anomaly_trainer
 from backend.radar.universal_anomaly_training import universal_anomaly_training
 from backend.radar.universal_anomaly_auto_trainer import run_auto_train_loop, universal_anomaly_auto_trainer
 from backend.radar.universal_anomaly_calibration import universal_anomaly_sample_calibrator
+from backend.app.db.session import init_db
 
 
 class MainnetConfigRequest(BaseModel):
@@ -254,6 +255,7 @@ def start_universal_anomaly_auto_train_thread() -> threading.Thread | None:
 
 @app.on_event("startup")
 async def startup():
+    init_db()
     try:
         if universal_anomaly_trainer.artifact_path.exists():
             universal_anomaly_trainer.activate_latest()
@@ -330,8 +332,38 @@ async def strategy_ai_page(request: Request):
         },
     )
 
+async def _state_major_rows() -> list[dict[str, Any]]:
+    specs = [
+        ("BTCUSDT", "BTC 永续"),
+        ("ETHUSDT", "ETH 永续"),
+        ("BNBUSDT", "BNB 永续"),
+        ("SOLUSDT", "SOL 永续"),
+    ]
+    quotes = await asyncio.gather(
+        *(market_service.price_quote(sym) for sym, _ in specs),
+        return_exceptions=True,
+    )
+    rows = []
+    for (sym, label), quote in zip(specs, quotes):
+        snapshot = market_service.last_snapshots.get(sym)
+        quote_failed = isinstance(quote, Exception)
+        quote_price = 0.0 if quote_failed else float(getattr(quote, "price", 0.0) or 0.0)
+        rows.append({
+            "symbol": sym,
+            "label": label,
+            "price": snapshot.price if snapshot and snapshot.price > 0 else quote_price,
+            "change": snapshot.change_5m if snapshot else 0,
+            "source": "quote_error" if quote_failed else getattr(quote, "source", "snapshot_cache" if snapshot else "unavailable"),
+            "stale": True if quote_failed else bool(getattr(quote, "stale", False)),
+            "error": type(quote).__name__ if quote_failed else getattr(quote, "error", ""),
+        })
+    return rows
+
+
 @app.get("/api/state")
 async def state():
+    majors = await _state_major_rows()
+    return {"last_scan_time":radar_engine.last_scan_time,"market_heat":radar_engine.market_heat,"alert_count":radar_engine.alert_count,"major":majors,"auto_enabled":autotrader.enabled,"market_data_source":binance_rest.last_public_source}
     majors=[]
     for sym,label in [("BTCUSDT","BTC 永续"),("ETHUSDT","ETH 永续"),("BNBUSDT","BNB 永续"),("SOLUSDT","SOL 永续")]:
         s=market_service.last_snapshots.get(sym)
@@ -998,7 +1030,9 @@ async def api_learning_paper_repair(payload: PaperRepairRequest):
         "PAPER_PROBE_ENABLED": "true",
         "MAX_OPEN_POSITIONS": "1",
         "LIVE_TRADING_ENABLED": "false",
-        "REQUIRE_CODEX_STRATEGY_FOR_ENTRY": "true",
+        "AI_ENABLED": "false",
+        "AI_STRATEGY_PROVIDER": "rule",
+        "REQUIRE_CODEX_STRATEGY_FOR_ENTRY": "false",
     }
     update_env_values(".env", values)
 
@@ -1010,7 +1044,9 @@ async def api_learning_paper_repair(payload: PaperRepairRequest):
     settings.paper_probe_enabled = True
     settings.max_open_positions = 1
     settings.live_trading_enabled = False
-    settings.require_codex_strategy_for_entry = True
+    settings.ai_enabled = False
+    settings.ai_strategy_provider = values["AI_STRATEGY_PROVIDER"]
+    settings.require_codex_strategy_for_entry = False
     autotrader.enabled = False
 
     verify = None

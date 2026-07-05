@@ -1,3 +1,36 @@
+x-ai-radar-runtime-env: &ai-radar-runtime-env
+  API_TOKEN: ${API_TOKEN:-}
+  MARKET_DATA_MODE: ${MARKET_DATA_MODE:-binance}
+  TRADE_MODE: ${TRADE_MODE:-paper}
+  AUTO_TRADING_ENABLED: ${AUTO_TRADING_ENABLED:-false}
+  LIVE_TRADING_ENABLED: ${LIVE_TRADING_ENABLED:-false}
+  LIVE_USE_TEST_ORDER: ${LIVE_USE_TEST_ORDER:-true}
+  ATTACH_PROTECTION_ORDERS: ${ATTACH_PROTECTION_ORDERS:-true}
+  AI_ENABLED: ${AI_ENABLED:-false}
+  AI_STRATEGY_PROVIDER: ${AI_STRATEGY_PROVIDER:-rule}
+  REQUIRE_CODEX_STRATEGY_FOR_ENTRY: ${REQUIRE_CODEX_STRATEGY_FOR_ENTRY:-false}
+  CODEX_COMMAND: ${CODEX_COMMAND:-}
+  BINANCE_TESTNET: ${BINANCE_TESTNET:-false}
+  BINANCE_API_KEY: ${BINANCE_API_KEY:-}
+  BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
+  BINANCE_RECV_WINDOW: ${BINANCE_RECV_WINDOW:-5000}
+  BINANCE_HTTP_TIMEOUT: ${BINANCE_HTTP_TIMEOUT:-8}
+  BINANCE_SYMBOL_LIMIT: ${BINANCE_SYMBOL_LIMIT:-80}
+  BINANCE_MOVER_SHARE: ${BINANCE_MOVER_SHARE:-0.45}
+  BINANCE_FACTOR_CONCURRENCY: ${BINANCE_FACTOR_CONCURRENCY:-6}
+  BINANCE_FACTOR_TTL_SECONDS: ${BINANCE_FACTOR_TTL_SECONDS:-45}
+  BINANCE_MARKET_FALLBACK_TESTNET: ${BINANCE_MARKET_FALLBACK_TESTNET:-false}
+  BINANCE_WS_ENABLED: ${BINANCE_WS_ENABLED:-true}
+  BINANCE_WS_URL: ${BINANCE_WS_URL:-}
+  BINANCE_WS_STALE_SECONDS: ${BINANCE_WS_STALE_SECONDS:-10}
+  BINANCE_KLINE_INTERVAL: ${BINANCE_KLINE_INTERVAL:-5m}
+  BINANCE_KLINE_LIMIT: ${BINANCE_KLINE_LIMIT:-30}
+  BINANCE_DEPTH_LIMIT: ${BINANCE_DEPTH_LIMIT:-20}
+  BINANCE_OI_PERIOD: ${BINANCE_OI_PERIOD:-5m}
+  BINANCE_USE_OPEN_INTEREST_HIST: ${BINANCE_USE_OPEN_INTEREST_HIST:-false}
+  BINANCE_USE_TAKER_RATIO_ENDPOINT: ${BINANCE_USE_TAKER_RATIO_ENDPOINT:-false}
+  DB_PATH: ${DB_PATH:-data/ai_radar.db}
+
 services:
   backend:
     build:
@@ -8,8 +41,9 @@ services:
     command:
       - sh
       - -c
-      - python -m alembic upgrade head && exec gunicorn backend.main:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8001 --workers 2 --timeout 120
+      - python -m alembic upgrade head && exec gunicorn backend.main:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8001 --workers 1 --timeout 300
     environment:
+      <<: *ai-radar-runtime-env
       APP_HOST: 0.0.0.0
       APP_PORT: 8001
     ports:
@@ -40,6 +74,7 @@ services:
       - -c
       - exec gunicorn backend.app.main:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8002 --workers 2 --timeout 120
     environment:
+      <<: *ai-radar-runtime-env
       APP_HOST: 0.0.0.0
       APP_PORT: 8002
     ports:

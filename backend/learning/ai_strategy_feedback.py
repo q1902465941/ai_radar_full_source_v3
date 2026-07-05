@@ -12,7 +12,7 @@ from backend.radar.candidate_feature_enhancer import candidate_feature_enhancer
 from backend.storage.db import db
 
 
-AI_PLAN_PROVIDERS = {"deepseek", "codex_cli", "openai"}
+AI_PLAN_PROVIDERS = {"deepseek", "codex_cli", "openai", "rule"}
 NON_LEARNING_CLOSE_REASONS = {"RESTORED_STALE_RECONCILE", "PRICE_SOURCE_STALE_RECONCILE"}
 
 
