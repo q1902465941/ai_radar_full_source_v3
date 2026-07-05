@@ -9,7 +9,10 @@ This document records the current evidence for landing
 
 - Local branch: `main`
 - Remote: `https://github.com/q1902465941/ai_radar_full_source_v3.git`
-- Current main branch landing commits have been pushed to `origin/main`.
+- Previous main branch landing commits have been pushed to `origin/main`.
+- The Docker monitor restoration commit is local and pending push because
+  GitHub HTTPS access from this machine is currently failing with connection
+  resets/timeouts.
 
 This file is the tracking record for the submission and Docker acceptance
 evidence.
@@ -112,17 +115,23 @@ $env:NGINX_IMAGE='docker.m.daocloud.io/library/nginx:1.29-alpine'
 docker compose up --build -d
 ```
 
-Docker Compose evidence from 2026-07-05:
+Docker Compose evidence from 2026-07-05 after restoring the detailed
+monitoring site as the default browser surface:
 
 - `docker compose up --build -d`: completed.
-- Backend container: `healthy`, published `0.0.0.0:8001->8001/tcp`.
+- Backend container: `healthy`, published `0.0.0.0:8001->8001/tcp`,
+  running `backend.main:app`.
+- v2 API container: `healthy`, published `0.0.0.0:8002->8002/tcp`,
+  running `backend.app.main:app`.
 - Frontend container: `healthy`, published `0.0.0.0:8080->80/tcp`.
-- Backend log: Gunicorn listens at `http://0.0.0.0:8001` using
-  `uvicorn.workers.UvicornWorker`.
-- Backend smoke: `http://127.0.0.1:8001/api/v2/health` returned
+- Backend smoke: `http://127.0.0.1:8080/api/state` returned market state.
+- v2 API smoke: `http://127.0.0.1:8002/api/v2/health` returned
   `{"ok":true,"service":"ai-radar-api","version":"v2"}`.
-- Frontend smoke: `http://127.0.0.1:8080/` returned HTTP 200 and the React
-  root element.
+- Proxied v2 smoke: `http://127.0.0.1:8080/api/v2/health` returned
+  `{"ok":true,"service":"ai-radar-api","version":"v2"}`.
+- Browser smoke: `http://127.0.0.1:8080/` redirects to `/radar`, renders the
+  legacy `猎妖人 AI Radar` monitoring page, includes `AI RADAR SYSTEM`, and no
+  longer includes `AI Radar Control Center`.
 
 ## Safety State
 

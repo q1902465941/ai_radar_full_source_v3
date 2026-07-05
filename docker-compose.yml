@@ -8,7 +8,7 @@ services:
     command:
       - sh
       - -c
-      - python -m alembic upgrade head && exec gunicorn backend.app.main:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8001 --workers 2 --timeout 120
+      - python -m alembic upgrade head && exec gunicorn backend.main:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8001 --workers 2 --timeout 120
     environment:
       APP_HOST: 0.0.0.0
       APP_PORT: 8001
@@ -21,7 +21,40 @@ services:
       test:
         [
           "CMD-SHELL",
-          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/api/v2/health', timeout=5).read()\"",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/api/state', timeout=5).read()\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  api-v2:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+    command:
+      - sh
+      - -c
+      - exec gunicorn backend.app.main:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8002 --workers 2 --timeout 120
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8002
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/api/v2/health', timeout=5).read()\"",
         ]
       interval: 30s
       timeout: 10s
@@ -39,10 +72,12 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+      api-v2:
+        condition: service_healthy
     ports:
       - "8080:80"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/radar >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5

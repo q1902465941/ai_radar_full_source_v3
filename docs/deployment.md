@@ -3,11 +3,13 @@
 This repository has two runnable surfaces:
 
 - Production-style stack: FastAPI v2 API (`backend.app.main:app`) plus React
-  frontend.
+  frontend migration surface.
 - Legacy stack: `backend.main` via `python run.py`, kept for existing Jinja
-  pages and compatibility tests.
+  monitoring pages and compatibility tests.
 
-Use the production-style stack for deployment.
+Use Docker Compose for deployment. It exposes the detailed legacy monitoring
+site on `8080` and runs the v2 API as a parallel service so migration checks
+remain available.
 
 ## Prerequisites
 
@@ -78,24 +80,28 @@ docker compose up --build -d
 
 Services:
 
-- Frontend: `http://127.0.0.1:8080`
-- Backend API: `http://127.0.0.1:8001`
-- API docs: `http://127.0.0.1:8001/api/v2/docs`
-- Health: `http://127.0.0.1:8001/api/v2/health`
+- Monitoring site: `http://127.0.0.1:8080`
+- Legacy backend API: `http://127.0.0.1:8001`
+- Backend v2 API: `http://127.0.0.1:8002`
+- v2 API docs: `http://127.0.0.1:8002/api/v2/docs`
+- v2 health: `http://127.0.0.1:8002/api/v2/health`
+- Proxied v2 health: `http://127.0.0.1:8080/api/v2/health`
 
 Compose runs:
 
 1. `python -m alembic upgrade head`
-2. Gunicorn with Uvicorn workers on port `8001`
-3. Nginx serving the React build on port `8080`
+2. Legacy monitoring app `backend.main:app` on port `8001`
+3. v2 API app `backend.app.main:app` on port `8002`
+4. Nginx on port `8080`, proxying the monitoring site by default and
+   `/api/v2/` to the v2 API
 
 Persistent mounts:
 
 - `./data:/app/data`
 - `./logs:/app/logs`
 
-The backend and frontend services both define health checks. The frontend waits
-for the backend to become healthy before starting.
+The backend, api-v2, and frontend services define health checks. The frontend
+waits for both backend services to become healthy before starting.
 
 ## Required Verification
 
@@ -131,12 +137,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\enable_wsl_prereq.ps1
 After deployment:
 
 ```bash
-curl http://127.0.0.1:8001/api/v2/health
-curl http://127.0.0.1:8080/
+curl http://127.0.0.1:8080/radar
+curl http://127.0.0.1:8080/api/state
+curl http://127.0.0.1:8002/api/v2/health
+curl http://127.0.0.1:8080/api/v2/health
 docker compose ps
 ```
 
-Expected health response:
+Expected v2 health response:
 
 ```json
 {"ok":true,"service":"ai-radar-api","version":"v2"}
@@ -170,8 +178,10 @@ Watch:
 
 - Container health in `docker compose ps`
 - Backend logs with `docker compose logs -f backend`
+- v2 API logs with `docker compose logs -f api-v2`
 - Frontend logs with `docker compose logs -f frontend`
-- API health endpoint `/api/v2/health`
+- Monitoring state endpoint `/api/state`
+- v2 API health endpoint `/api/v2/health`
 - Readiness-related API output before any supervised live validation
 
 ## Rollback
@@ -189,5 +199,5 @@ For config-caused issues:
 
 1. Set `LIVE_TRADING_ENABLED=false`.
 2. Restore the previous `.env` values.
-3. Restart with `docker compose restart backend`.
+3. Restart with `docker compose restart backend api-v2 frontend`.
 4. Re-run the health and smoke checks.

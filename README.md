@@ -2,17 +2,19 @@
 
 AI Radar is a local trading research and execution-control system for radar
 scans, strategy research, paper/live readiness gates, and an operational
-React dashboard.
+monitoring dashboard.
 
-The production-style path is the v2 API and React frontend:
+The repository currently has two runnable surfaces:
 
-- Backend API: `backend.app.main:app`
+- Detailed monitoring site: `backend.main:app`
+- Backend v2 API: `backend.app.main:app`
 - Local backend entry: `python run_v2.py`
-- Frontend app: `frontend/`
+- React migration app: `frontend/`
 - Docker Compose entry: `docker compose up --build`
 
-The legacy Jinja app still exists at `python run.py` for old pages and
-compatibility checks.
+Docker Compose keeps the detailed legacy Jinja monitoring site as the default
+browser surface on port `8080`, while the v2 API remains available in a
+parallel service for migration and API checks.
 
 ## Local Development
 
@@ -40,6 +42,14 @@ Open:
 - Backend health: `http://127.0.0.1:8001/api/v2/health`
 - Backend docs: `http://127.0.0.1:8001/api/v2/docs`
 
+Legacy monitoring site:
+
+```bash
+python run.py
+```
+
+Open `http://127.0.0.1:8001/radar`.
+
 ## Docker Compose
 
 ```bash
@@ -59,9 +69,11 @@ docker compose up --build -d
 
 Open:
 
-- Frontend: `http://127.0.0.1:8080`
-- Backend API: `http://127.0.0.1:8001`
-- Health: `http://127.0.0.1:8001/api/v2/health`
+- Monitoring site: `http://127.0.0.1:8080`
+- Legacy backend API: `http://127.0.0.1:8001`
+- Backend v2 API: `http://127.0.0.1:8002`
+- v2 health: `http://127.0.0.1:8002/api/v2/health`
+- Proxied v2 health: `http://127.0.0.1:8080/api/v2/health`
 
 Compose mounts `./data` and `./logs` for persistent runtime state. Secrets
 must stay in `.env`; `.env` is ignored by git.
@@ -124,8 +136,9 @@ are already occupied.
 Deployment smoke tests:
 
 ```bash
-curl http://127.0.0.1:8001/api/v2/health
-curl http://127.0.0.1:8080/
+curl http://127.0.0.1:8080/radar
+curl http://127.0.0.1:8080/api/state
+curl http://127.0.0.1:8002/api/v2/health
 ```
 
 See `docs/deployment.md` for the full deployment checklist and rollback path.

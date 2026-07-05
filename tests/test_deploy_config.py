@@ -8,20 +8,33 @@ def test_docker_compose_defines_frontend_backend_and_migrations():
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
     assert "backend:" in compose
+    assert "api-v2:" in compose
     assert "frontend:" in compose
     assert "alembic upgrade head" in compose
-    assert "exec gunicorn backend.app.main:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8001" in compose
+    assert "exec gunicorn backend.main:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8001" in compose
+    assert "exec gunicorn backend.app.main:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8002" in compose
     assert "command: >" not in compose
     assert "8001:8001" in compose
+    assert "8002:8002" in compose
     assert "8080:80" in compose
 
 
 def test_docker_compose_defines_service_healthchecks():
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
+    assert "/api/state" in compose
     assert "/api/v2/health" in compose
     assert "condition: service_healthy" in compose
     assert "healthcheck:" in compose
+
+
+def test_frontend_nginx_routes_legacy_monitor_by_default_and_v2_api_separately():
+    nginx = (ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
+
+    assert "proxy_pass http://api-v2:8002/api/v2/;" in nginx
+    assert "proxy_pass http://backend:8001/api/;" in nginx
+    assert "proxy_pass http://backend:8001;" in nginx
+    assert "try_files $uri $uri/ /index.html" not in nginx
 
 
 def test_dockerignore_preserves_data_artifacts_for_backend_image():
