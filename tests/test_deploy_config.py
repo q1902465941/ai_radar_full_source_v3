@@ -66,6 +66,17 @@ def test_docker_prereq_script_reports_wsl_and_daemon_state():
     assert "WSL optional component" in script
 
 
+def test_enable_wsl_prereq_script_self_elevates_and_runs_wsl_install():
+    script = (ROOT / "scripts" / "enable_wsl_prereq.ps1").read_text(encoding="utf-8")
+
+    assert "Start-Process" in script
+    assert "-Verb RunAs" in script
+    assert "wsl --install --no-distribution" in script
+    assert "check_docker_prereqs.ps1" in script
+    assert "Restart-Computer" not in script
+    assert "docker compose up" not in script
+
+
 def test_local_stack_scripts_start_and_stop_production_style_services():
     start_script = (ROOT / "scripts" / "start_local_stack.ps1").read_text(encoding="utf-8")
     stop_script = (ROOT / "scripts" / "stop_local_stack.ps1").read_text(encoding="utf-8")
@@ -88,7 +99,8 @@ def test_landing_status_documents_verified_paths_and_remaining_blocker():
     assert "scripts/start_local_stack.ps1" in status
     assert "scripts/check_docker_prereqs.ps1" in status
     assert "WSL optional component" in status
-    assert "ahead of origin/main" in status
+    assert "pushed to `origin/main`" in status
+    assert "scripts/enable_wsl_prereq.ps1" in status
 
 
 def test_github_actions_ci_runs_landing_verification():

@@ -93,6 +93,13 @@ Check Docker Desktop and WSL prerequisites before Compose deployment:
 powershell -ExecutionPolicy Bypass -File .\scripts\check_docker_prereqs.ps1
 ```
 
+If the check reports `WSL_OPTIONAL_COMPONENT_REQUIRED`, run the helper below,
+approve the Windows elevation prompt, then reboot:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\enable_wsl_prereq.ps1
+```
+
 Run a local production-style stack without Docker:
 
 ```powershell

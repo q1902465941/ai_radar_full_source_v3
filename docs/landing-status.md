@@ -30,7 +30,7 @@ and `scripts/stop_local_stack.ps1`.
 
 Evidence from the latest run:
 
-- Backend tests: `340 passed`
+- Backend tests: `341 passed`
 - Frontend tests: `5 files / 8 tests passed`
 - Frontend production build: passed
 - Backend smoke: `/api/v2/health` returned service `ai-radar-api`
@@ -74,10 +74,10 @@ Current blocker on this machine:
 
 - WSL optional component is unavailable.
 - Docker Desktop daemon/API returns 500 for `docker info`.
-- The prerequisite script prints the required elevated command:
+- The helper script can request elevation and run the required WSL command:
 
 ```powershell
-wsl --install --no-distribution
+powershell -ExecutionPolicy Bypass -File .\scripts\enable_wsl_prereq.ps1
 ```
 
 After running that from an elevated PowerShell and rebooting, re-run:
@@ -103,7 +103,8 @@ reconciliation, production acceptance, and protection-order checks.
 
 ## Remaining To Land Fully
 
-1. Enable WSL optional component and reboot the machine.
+1. Run `scripts/enable_wsl_prereq.ps1`, approve elevation, and reboot the
+   machine.
 2. Verify Docker prerequisites pass.
 3. Run `docker compose up --build`.
 4. Smoke test `http://127.0.0.1:8080/` and

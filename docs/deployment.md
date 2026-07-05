@@ -109,6 +109,14 @@ Before running Compose on Windows, check Docker Desktop and WSL prerequisites:
 powershell -ExecutionPolicy Bypass -File .\scripts\check_docker_prereqs.ps1
 ```
 
+If the check reports `WSL_OPTIONAL_COMPONENT_REQUIRED`, run the helper below,
+approve the Windows elevation prompt, reboot, and then run the prerequisite
+check again:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\enable_wsl_prereq.ps1
+```
+
 After deployment:
 
 ```bash
