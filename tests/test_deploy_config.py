@@ -79,3 +79,13 @@ def test_local_stack_scripts_start_and_stop_production_style_services():
     assert "local_stack.json" in stop_script
     assert "Get-NetTCPConnection" in stop_script
     assert "Stop-Process" in stop_script
+
+
+def test_landing_status_documents_verified_paths_and_remaining_blocker():
+    status = (ROOT / "docs" / "landing-status.md").read_text(encoding="utf-8")
+
+    assert "scripts/verify_local.ps1" in status
+    assert "scripts/start_local_stack.ps1" in status
+    assert "scripts/check_docker_prereqs.ps1" in status
+    assert "WSL optional component" in status
+    assert "ahead of origin/main" in status
