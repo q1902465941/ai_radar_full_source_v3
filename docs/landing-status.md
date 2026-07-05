@@ -9,7 +9,7 @@ This document records the current evidence for landing
 
 - Local branch: `main`
 - Remote: `https://github.com/q1902465941/ai_radar_full_source_v3.git`
-- Code landing commits through the Docker Compose startup fix have been pushed to `origin/main`.
+- Current main branch landing commits have been pushed to `origin/main`.
 
 This file is the tracking record for the submission and Docker acceptance
 evidence.
@@ -52,6 +52,10 @@ and frontend dependencies, checks `docker compose config --quiet`, and runs
 Latest observed branch result:
 
 - Branch badge: `CI - passing`
+- GitHub Actions run `28738839909` completed successfully for commit
+  `209e034078205b67b233e97cccb2488009d94989`.
+- Job `landing-verification` completed successfully, including dependency
+  install, `docker compose config --quiet`, and `scripts/verify_local.ps1`.
 
 ## Docker Compose Status
 
@@ -136,5 +140,6 @@ reconciliation, production acceptance, and protection-order checks.
 
 ## Remaining To Land Fully
 
-1. Push the Docker Compose startup fix commit to `origin/main`.
-2. Confirm GitHub Actions passes on that pushed commit.
+No known landing blockers remain. If the local network continues to block the
+official Docker Hub endpoints, use the documented base image overrides before
+running `docker compose up --build -d`.
