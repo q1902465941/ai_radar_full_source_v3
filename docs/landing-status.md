@@ -43,6 +43,14 @@ Default local stack URLs:
 - Frontend: `http://127.0.0.1:4173/`
 - Backend health: `http://127.0.0.1:8001/api/v2/health`
 
+## CI Verification
+
+GitHub Actions workflow: `.github/workflows/ci.yml`
+
+It runs on `push` to `main` and on pull requests. The workflow installs backend
+and frontend dependencies, checks `docker compose config --quiet`, and runs
+`scripts/verify_local.ps1`.
+
 ## Docker Compose Status
 
 Compose syntax is valid:

@@ -89,3 +89,18 @@ def test_landing_status_documents_verified_paths_and_remaining_blocker():
     assert "scripts/check_docker_prereqs.ps1" in status
     assert "WSL optional component" in status
     assert "ahead of origin/main" in status
+
+
+def test_github_actions_ci_runs_landing_verification():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert "pull_request" in workflow
+    assert "push" in workflow
+    assert "windows-latest" in workflow
+    assert "actions/setup-python" in workflow
+    assert "python-version: '3.12'" in workflow
+    assert "actions/setup-node" in workflow
+    assert "node-version: '24'" in workflow
+    assert "npm ci" in workflow
+    assert "scripts\\verify_local.ps1" in workflow
+    assert "docker compose config --quiet" in workflow
