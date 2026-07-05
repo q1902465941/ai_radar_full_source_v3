@@ -6,7 +6,10 @@ __pycache__/
 frontend/node_modules/
 frontend/dist/
 logs/
-data/
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/__pycache__/
 tmp_ui_review/
 .env
 .git/
