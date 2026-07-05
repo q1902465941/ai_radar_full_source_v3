@@ -86,6 +86,18 @@ npm test -- --run
 npm run build
 ```
 
+Equivalent scripted local verification:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify_local.ps1
+```
+
+Before running Compose on Windows, check Docker Desktop and WSL prerequisites:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\check_docker_prereqs.ps1
+```
+
 After deployment:
 
 ```bash

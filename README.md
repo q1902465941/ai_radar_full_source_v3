@@ -81,6 +81,18 @@ npm test -- --run
 npm run build
 ```
 
+Or run the local verification script from the repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify_local.ps1
+```
+
+Check Docker Desktop and WSL prerequisites before Compose deployment:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\check_docker_prereqs.ps1
+```
+
 Deployment smoke tests:
 
 ```bash
