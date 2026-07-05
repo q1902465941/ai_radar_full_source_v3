@@ -5,16 +5,15 @@ Last updated: 2026-07-05
 This document records the current evidence for landing
 `E:\ai_radar_full_source_v3` and the remaining machine-level blocker.
 
-## Current Git State
+## Current Submission State
 
 - Local branch: `main`
-- Local status at audit time: clean
-- Publication state: local `main` is ahead of origin/main by local landing
-  commits.
 - Remote: `https://github.com/q1902465941/ai_radar_full_source_v3.git`
+- Code landing commits through `ci: add landing verification workflow` have
+  been pushed to `origin/main`.
 
-The work is committed locally but has not been pushed to `origin/main` in this
-thread.
+This file is the tracking record for the submission and remaining machine-level
+blocker.
 
 ## Verified Local Landing Path
 
@@ -31,7 +30,7 @@ and `scripts/stop_local_stack.ps1`.
 
 Evidence from the latest run:
 
-- Backend tests: `338 passed`
+- Backend tests: `340 passed`
 - Frontend tests: `5 files / 8 tests passed`
 - Frontend production build: passed
 - Backend smoke: `/api/v2/health` returned service `ai-radar-api`
@@ -50,6 +49,10 @@ GitHub Actions workflow: `.github/workflows/ci.yml`
 It runs on `push` to `main` and on pull requests. The workflow installs backend
 and frontend dependencies, checks `docker compose config --quiet`, and runs
 `scripts/verify_local.ps1`.
+
+Latest observed branch result:
+
+- Branch badge: `CI - passing`
 
 ## Docker Compose Status
 
@@ -105,4 +108,3 @@ reconciliation, production acceptance, and protection-order checks.
 3. Run `docker compose up --build`.
 4. Smoke test `http://127.0.0.1:8080/` and
    `http://127.0.0.1:8001/api/v2/health`.
-5. Push the local commits when remote publication is desired.
