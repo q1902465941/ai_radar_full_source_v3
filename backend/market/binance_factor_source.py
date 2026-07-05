@@ -28,6 +28,7 @@ class BinanceFactorSource:
         self.last_symbol_count = 0
         self.last_snapshot_count = 0
         self.last_failed_symbols: list[str] = []
+        self.last_kline_missing_symbols: list[str] = []
         self.last_effective_concurrency = 0
         self.last_refresh_timings: dict[str, float] = {}
         self.refresh_in_progress = False
@@ -36,6 +37,7 @@ class BinanceFactorSource:
         self.current_refresh_source = ""
         self.current_symbol_count = 0
         self.current_snapshot_count = 0
+        self.current_kline_missing_symbols: list[str] = []
         self.current_effective_concurrency = 0
         self.current_refresh_timings: dict[str, float] = {}
         self._exchange_symbol_meta: dict[str, dict[str, Any]] = {}
@@ -105,6 +107,7 @@ class BinanceFactorSource:
             snapshots = [row for row in results if row is not None]
             self.current_snapshot_count = len(snapshots)
             if snapshots:
+                self._mark_degraded_for_excessive_kline_missing(len(snapshots))
                 self._cache = snapshots
                 self._cache_ts = now
                 self._finish_refresh_diagnostics(len(snapshots))
@@ -207,6 +210,7 @@ class BinanceFactorSource:
         self.current_refresh_source = ""
         self.current_symbol_count = 0
         self.current_snapshot_count = 0
+        self.current_kline_missing_symbols = []
         self.current_effective_concurrency = 0
         self.current_refresh_timings = {}
 
@@ -218,7 +222,22 @@ class BinanceFactorSource:
         self.last_snapshot_count = int(snapshot_count)
         self.last_effective_concurrency = self.current_effective_concurrency
         self.last_refresh_timings = dict(self.current_refresh_timings or {})
+        self.last_kline_missing_symbols = list(self.current_kline_missing_symbols or [])[:20]
         self.refresh_in_progress = False
+
+    def _record_kline_missing(self, symbol: str) -> None:
+        target = self.current_kline_missing_symbols if self.refresh_in_progress else self.last_kline_missing_symbols
+        if symbol and symbol not in target and len(target) < 50:
+            target.append(symbol)
+
+    def _mark_degraded_for_excessive_kline_missing(self, snapshot_count: int) -> None:
+        missing_count = len(self.current_kline_missing_symbols or [])
+        if missing_count <= 0:
+            return
+        total = max(1, int(snapshot_count or 0))
+        threshold = max(3, math.ceil(total * 0.20))
+        if missing_count >= threshold:
+            self._mark_degraded(f"snapshot_quality:kline_missing:{missing_count}/{total}")
 
     def _discover_active_candidates(
         self,
@@ -425,7 +444,8 @@ class BinanceFactorSource:
         structure_metrics = dict(kline_features.get("structure_metrics") or {})
         if blockers:
             structure_metrics["quality_blockers"] = blockers[:5]
-            self._mark_degraded("snapshot_quality:kline_missing")
+            if "kline_missing" in blockers:
+                self._record_kline_missing(symbol)
         taker_buy_ratio, taker_sell_ratio = _taker_ratio(_as_list(taker_rows), kline_features)
         oi_change = self._open_interest_change(symbol, oi_now, _as_list(oi_hist))
         price = _first_positive(

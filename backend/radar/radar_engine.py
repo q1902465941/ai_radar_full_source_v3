@@ -80,6 +80,7 @@ class RadarEngine:
                 "effective_concurrency": binance_factor_source.last_effective_concurrency,
                 "timings": dict(binance_factor_source.last_refresh_timings or {}),
                 "failed_symbols": list(binance_factor_source.last_failed_symbols or [])[:8],
+                "kline_missing_symbols": list(binance_factor_source.last_kline_missing_symbols or [])[:20],
                 "refresh_in_progress": bool(binance_factor_source.refresh_in_progress),
                 "current": {
                     "source": binance_factor_source.current_refresh_source,
@@ -89,6 +90,7 @@ class RadarEngine:
                     "snapshot_count": binance_factor_source.current_snapshot_count,
                     "effective_concurrency": binance_factor_source.current_effective_concurrency,
                     "timings": dict(binance_factor_source.current_refresh_timings or {}),
+                    "kline_missing_symbols": list(binance_factor_source.current_kline_missing_symbols or [])[:20],
                 },
             },
             "active_coins": self._active_coins_status(compact=compact),

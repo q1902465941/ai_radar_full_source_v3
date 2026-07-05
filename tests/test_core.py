@@ -657,6 +657,76 @@ def test_binance_factor_source_keeps_snapshot_when_kline_missing(monkeypatch):
     assert "kline_missing" in (snaps[0].structure_metrics.get("quality_blockers") or [])
     assert source.last_failed_symbols == []
 
+
+def test_binance_factor_source_does_not_degrade_for_sparse_kline_missing(monkeypatch):
+    monkeypatch.setattr(settings, "radar_exclude_major_symbols_from_anomaly", False)
+    monkeypatch.setattr(settings, "binance_symbol_limit", 10)
+    monkeypatch.setattr(settings, "binance_factor_concurrency", 2)
+    monkeypatch.setattr(settings, "binance_factor_ttl_seconds", 0)
+    monkeypatch.setattr(settings, "binance_use_open_interest_hist", False)
+    monkeypatch.setattr(settings, "binance_use_taker_ratio_endpoint", False)
+
+    class SparseMissingKlineClient(FakeBinanceMarketClient):
+        symbols = [f"SPARSE{i}USDT" for i in range(10)]
+
+        async def exchange_info(self):
+            return {"symbols": [_exchange_symbol_meta(symbol) for symbol in self.symbols]}
+
+        async def premium_index(self):
+            return [{"symbol": symbol, "markPrice": str(100 + idx), "lastFundingRate": "0"} for idx, symbol in enumerate(self.symbols)]
+
+        async def ticker_24hr(self, symbol=None):
+            return [{"symbol": symbol, "lastPrice": str(100 + idx), "quoteVolume": "1000000"} for idx, symbol in enumerate(self.symbols)]
+
+        async def klines(self, symbol, interval="5m", limit=30):
+            if symbol == "SPARSE0USDT":
+                return []
+            return await super().klines("BTCUSDT", interval, limit)
+
+    source = BinanceFactorSource(client=SparseMissingKlineClient())
+    snaps = __import__("asyncio").run(source.get_snapshots(force_refresh=True))
+
+    assert len(snaps) == 10
+    assert source.last_refresh_degraded is False
+    assert source.last_kline_missing_symbols == ["SPARSE0USDT"]
+    sparse = next(row for row in snaps if row.symbol == "SPARSE0USDT")
+    assert "kline_missing" in (sparse.structure_metrics.get("quality_blockers") or [])
+
+
+def test_binance_factor_source_degrades_for_excessive_kline_missing(monkeypatch):
+    monkeypatch.setattr(settings, "radar_exclude_major_symbols_from_anomaly", False)
+    monkeypatch.setattr(settings, "binance_symbol_limit", 10)
+    monkeypatch.setattr(settings, "binance_factor_concurrency", 2)
+    monkeypatch.setattr(settings, "binance_factor_ttl_seconds", 0)
+    monkeypatch.setattr(settings, "binance_use_open_interest_hist", False)
+    monkeypatch.setattr(settings, "binance_use_taker_ratio_endpoint", False)
+
+    class ExcessiveMissingKlineClient(FakeBinanceMarketClient):
+        symbols = [f"EXMISS{i}USDT" for i in range(10)]
+
+        async def exchange_info(self):
+            return {"symbols": [_exchange_symbol_meta(symbol) for symbol in self.symbols]}
+
+        async def premium_index(self):
+            return [{"symbol": symbol, "markPrice": str(100 + idx), "lastFundingRate": "0"} for idx, symbol in enumerate(self.symbols)]
+
+        async def ticker_24hr(self, symbol=None):
+            return [{"symbol": symbol, "lastPrice": str(100 + idx), "quoteVolume": "1000000"} for idx, symbol in enumerate(self.symbols)]
+
+        async def klines(self, symbol, interval="5m", limit=30):
+            if symbol in set(self.symbols[:3]):
+                return []
+            return await super().klines("BTCUSDT", interval, limit)
+
+    source = BinanceFactorSource(client=ExcessiveMissingKlineClient())
+    snaps = __import__("asyncio").run(source.get_snapshots(force_refresh=True))
+
+    assert len(snaps) == 10
+    assert source.last_refresh_degraded is True
+    assert "snapshot_quality:kline_missing:3/10" in source.last_refresh_error
+    assert source.last_kline_missing_symbols[:3] == ["EXMISS0USDT", "EXMISS1USDT", "EXMISS2USDT"]
+
+
 def test_binance_symbol_selection_includes_movers_after_priority(monkeypatch):
     monkeypatch.setattr(settings, "radar_exclude_major_symbols_from_anomaly", False)
     monkeypatch.setattr(settings, "binance_symbol_limit", 4)
@@ -9257,6 +9327,19 @@ class FakeRunner:
         output_path = Path(cmd[cmd.index("--output-last-message") + 1])
         output_path.write_text(json.dumps(self.payload), encoding="utf-8")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+
+def _exchange_symbol_meta(symbol: str) -> dict:
+    return {
+        "symbol": symbol,
+        "status": "TRADING",
+        "contractType": "PERPETUAL",
+        "quoteAsset": "USDT",
+        "marginAsset": "USDT",
+        "underlyingType": "COIN",
+        "underlyingSubType": ["Test"],
+    }
+
 
 class FakeBinanceMarketClient:
     async def exchange_info(self):
