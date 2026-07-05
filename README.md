@@ -46,6 +46,17 @@ Open:
 docker compose up --build
 ```
 
+If Docker Hub image pulls fail on `auth.docker.io` or
+`registry-1.docker.io`, the Compose build supports explicit base image
+overrides:
+
+```powershell
+$env:PYTHON_IMAGE='docker.m.daocloud.io/library/python:3.12-slim'
+$env:NODE_IMAGE='docker.m.daocloud.io/library/node:24-alpine'
+$env:NGINX_IMAGE='docker.m.daocloud.io/library/nginx:1.29-alpine'
+docker compose up --build -d
+```
+
 Open:
 
 - Frontend: `http://127.0.0.1:8080`

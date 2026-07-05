@@ -65,6 +65,17 @@ cd E:\ai_radar_full_source_v3
 docker compose up --build
 ```
 
+If the local network resolves Docker Hub endpoints incorrectly or blocks
+anonymous pulls, set base image overrides before building. This keeps the
+Dockerfiles on official defaults while allowing a verified mirror path:
+
+```powershell
+$env:PYTHON_IMAGE='docker.m.daocloud.io/library/python:3.12-slim'
+$env:NODE_IMAGE='docker.m.daocloud.io/library/node:24-alpine'
+$env:NGINX_IMAGE='docker.m.daocloud.io/library/nginx:1.29-alpine'
+docker compose up --build -d
+```
+
 Services:
 
 - Frontend: `http://127.0.0.1:8080`

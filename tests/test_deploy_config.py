@@ -10,6 +10,8 @@ def test_docker_compose_defines_frontend_backend_and_migrations():
     assert "backend:" in compose
     assert "frontend:" in compose
     assert "alembic upgrade head" in compose
+    assert "exec gunicorn backend.app.main:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8001" in compose
+    assert "command: >" not in compose
     assert "8001:8001" in compose
     assert "8080:80" in compose
 
@@ -34,8 +36,20 @@ def test_dockerignore_preserves_data_artifacts_for_backend_image():
 def test_backend_dockerfile_uses_production_web_server():
     dockerfile = (ROOT / "Dockerfile.backend").read_text(encoding="utf-8")
 
+    assert "ARG PYTHON_IMAGE=python:3.12-slim" in dockerfile
     assert "gunicorn" in dockerfile
     assert "uvicorn.workers.UvicornWorker" in dockerfile
+
+
+def test_frontend_dockerfile_allows_base_image_overrides():
+    dockerfile = (ROOT / "frontend" / "Dockerfile").read_text(encoding="utf-8")
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "ARG NODE_IMAGE=node:24-alpine" in dockerfile
+    assert "ARG NGINX_IMAGE=nginx:1.29-alpine" in dockerfile
+    assert "PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}" in compose
+    assert "NODE_IMAGE: ${NODE_IMAGE:-node:24-alpine}" in compose
+    assert "NGINX_IMAGE: ${NGINX_IMAGE:-nginx:1.29-alpine}" in compose
 
 
 def test_backend_dockerfile_copies_hedge_runtime_backend_packages():

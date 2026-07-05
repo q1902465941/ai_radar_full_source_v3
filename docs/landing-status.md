@@ -3,17 +3,16 @@
 Last updated: 2026-07-05
 
 This document records the current evidence for landing
-`E:\ai_radar_full_source_v3` and the remaining machine-level blocker.
+`E:\ai_radar_full_source_v3`.
 
 ## Current Submission State
 
 - Local branch: `main`
 - Remote: `https://github.com/q1902465941/ai_radar_full_source_v3.git`
-- Code landing commits through `ci: add landing verification workflow` have
-  been pushed to `origin/main`.
+- Code landing commits through the Docker Compose startup fix have been pushed to `origin/main`.
 
-This file is the tracking record for the submission and remaining machine-level
-blocker.
+This file is the tracking record for the submission and Docker acceptance
+evidence.
 
 ## Verified Local Landing Path
 
@@ -70,11 +69,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check_docker_prereqs.ps1
 
 Script path: `scripts/check_docker_prereqs.ps1`.
 
-Current blocker on this machine:
+Resolved machine-level issue:
 
-- WSL optional component is unavailable.
-- Docker Desktop daemon/API returns 500 for `docker info`.
-- The helper script can request elevation and run the required WSL command:
+- The prior WSL optional component blocker was cleared by running the helper,
+  approving elevation, and rebooting.
+- Docker Desktop now reports a running daemon and Compose support.
+- The helper script remains available for machines that still report
+  `WSL_OPTIONAL_COMPONENT_REQUIRED`:
+
+Script path: `scripts/enable_wsl_prereq.ps1`.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\enable_wsl_prereq.ps1
@@ -86,6 +89,36 @@ After running that from an elevated PowerShell and rebooting, re-run:
 powershell -ExecutionPolicy Bypass -File .\scripts\check_docker_prereqs.ps1
 docker compose up --build
 ```
+
+Current Docker Hub network finding on this machine:
+
+- Direct Docker Hub pulls for `python:3.12-slim`, `node:24-alpine`, and
+  `nginx:1.29-alpine` failed while fetching anonymous tokens from
+  `auth.docker.io`.
+- DNS returned unreachable `2a03:2880:*:face:b00c:*` IPv6 records for Docker
+  Hub endpoints, and direct host `curl` to Docker Hub timed out.
+- `docker.m.daocloud.io` successfully pulled the three required base images.
+
+Compose build supports explicit base image overrides:
+
+```powershell
+$env:PYTHON_IMAGE='docker.m.daocloud.io/library/python:3.12-slim'
+$env:NODE_IMAGE='docker.m.daocloud.io/library/node:24-alpine'
+$env:NGINX_IMAGE='docker.m.daocloud.io/library/nginx:1.29-alpine'
+docker compose up --build -d
+```
+
+Docker Compose evidence from 2026-07-05:
+
+- `docker compose up --build -d`: completed.
+- Backend container: `healthy`, published `0.0.0.0:8001->8001/tcp`.
+- Frontend container: `healthy`, published `0.0.0.0:8080->80/tcp`.
+- Backend log: Gunicorn listens at `http://0.0.0.0:8001` using
+  `uvicorn.workers.UvicornWorker`.
+- Backend smoke: `http://127.0.0.1:8001/api/v2/health` returned
+  `{"ok":true,"service":"ai-radar-api","version":"v2"}`.
+- Frontend smoke: `http://127.0.0.1:8080/` returned HTTP 200 and the React
+  root element.
 
 ## Safety State
 
@@ -103,9 +136,5 @@ reconciliation, production acceptance, and protection-order checks.
 
 ## Remaining To Land Fully
 
-1. Run `scripts/enable_wsl_prereq.ps1`, approve elevation, and reboot the
-   machine.
-2. Verify Docker prerequisites pass.
-3. Run `docker compose up --build`.
-4. Smoke test `http://127.0.0.1:8080/` and
-   `http://127.0.0.1:8001/api/v2/health`.
+1. Push the Docker Compose startup fix commit to `origin/main`.
+2. Confirm GitHub Actions passes on that pushed commit.
