@@ -51,6 +51,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop_local_stack.ps1
 
 If ports are occupied, pass `-BackendPort` and `-FrontendPort` to both scripts.
 
+For local dual-backend debugging, set
+`MONITOR_LEGACY_BACKEND_URL=http://127.0.0.1:8001` when the v2 API should read
+the legacy monitor's live radar payload. Leave it blank for v2-only local runs.
+
 Local URLs:
 
 - Frontend dev server: `http://127.0.0.1:5173`
@@ -108,7 +112,13 @@ DOCKER_DB_PATH=data/ai_radar.db
 AI_ENABLED=false
 AI_STRATEGY_PROVIDER=rule
 REQUIRE_CODEX_STRATEGY_FOR_ENTRY=false
+MONITOR_LEGACY_DB_FALLBACK_ENABLED=true
 ```
+
+Compose supplies `MONITOR_LEGACY_BACKEND_URL=http://backend:8001` by default.
+The v2 dashboard and latest radar endpoints therefore prefer the detailed
+legacy monitor's live `/api/radar` payload, with a bounded SQLite snapshot
+fallback when the live monitor is briefly unavailable.
 
 Persistent mounts:
 

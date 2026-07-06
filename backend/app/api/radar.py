@@ -15,6 +15,7 @@ from backend.app.services.radar_persistence import (
     radar_scan_record_asdict,
     save_radar_scan_result,
 )
+from backend.app.services.legacy_monitor_source import fetch_live_radar_payload, legacy_payload_scan_response
 from backend.radar.radar_engine import radar_engine
 
 router = APIRouter(prefix="/api/v2/radar", tags=["radar"])
@@ -105,6 +106,10 @@ async def start_radar_scan(payload: RadarScanRequest, request: Request) -> dict[
 
 @router.get("/scans/latest")
 async def latest_radar_scan(request: Request, include_details: bool = False) -> dict[str, object]:
+    live_payload = await fetch_live_radar_payload()
+    if live_payload is not None:
+        return legacy_payload_scan_response(live_payload, include_details=include_details)
+
     session_factory = request.app.state.session_factory
     with session_scope(session_factory) as session:
         scan = session.execute(

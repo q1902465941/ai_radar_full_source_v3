@@ -50,6 +50,11 @@ python run.py
 
 Open `http://127.0.0.1:8001/radar`.
 
+When running both local backends outside Docker, set
+`MONITOR_LEGACY_BACKEND_URL=http://127.0.0.1:8001` for the v2 API if it should
+mirror the detailed legacy monitor's live radar feed. Leave it blank for
+v2-only local runs.
+
 ## Docker Compose
 
 ```bash
@@ -90,7 +95,12 @@ DOCKER_DB_PATH=data/ai_radar.db
 AI_ENABLED=false
 AI_STRATEGY_PROVIDER=rule
 REQUIRE_CODEX_STRATEGY_FOR_ENTRY=false
+MONITOR_LEGACY_DB_FALLBACK_ENABLED=true
 ```
+
+Compose supplies `MONITOR_LEGACY_BACKEND_URL=http://backend:8001` by default so
+the v2 dashboard and latest radar API read the same live monitor feed as the
+detailed site.
 
 ## Safety Defaults
 

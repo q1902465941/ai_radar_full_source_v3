@@ -207,6 +207,10 @@ class Settings(BaseSettings):
     replay_max_risk_pct: float = 0.025
     replay_atr_risk_mult: float = 0.9
     replay_tp_r: float = 2.0
+    monitor_legacy_backend_url: str = ""
+    monitor_legacy_backend_timeout_seconds: float = 3.0
+    monitor_legacy_db_fallback_enabled: bool = False
+    monitor_legacy_snapshot_max_age_seconds: int = 240
     db_path: str = "data/ai_radar.db"
 
     class Config:

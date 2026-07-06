@@ -61,7 +61,7 @@ class LearnedRiskGuard:
         if low_trust_learning:
             reasons.append("learning_data_not_production_grade")
             hard_blocks = []
-            advice.append("Learning evidence is not production-grade; negative matched patterns block non-probe entries until market-grade evidence improves.")
+            advice.append("Learning evidence is not production-grade; keep negative matched patterns as review evidence, not as a paper-sampling hard block.")
         elif positive_match:
             reasons = [reason for reason in reasons if not reason.startswith("causal_factor_negative:")]
             hard_blocks = []
@@ -74,7 +74,7 @@ class LearnedRiskGuard:
             if block.get("advice"):
                 advice.append(str(block["advice"]))
 
-        blocking_reasons = [
+        blocking_reasons = [] if low_trust_learning else [
             reason
             for reason in reasons
             if reason != "trade_attribution_samples_low"
@@ -85,7 +85,7 @@ class LearnedRiskGuard:
             )
         ]
         strict = bool(recovery_mode and settings.trade_learning_guard_recovery_strict)
-        allow_paper = not blocking_reasons and bool(attribution.paper_ok)
+        allow_paper = True if low_trust_learning else (not blocking_reasons and bool(attribution.paper_ok))
         allow_live = False if low_trust_learning else (allow_paper and attribution.live_ok and not hard_blocks)
         severity = "PASS"
         if blocking_reasons:

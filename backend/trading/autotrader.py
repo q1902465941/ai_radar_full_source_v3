@@ -420,6 +420,16 @@ class AutoTrader:
                     cooldown_until = self._cooldown_ai_wait_candidate(item, plan, wd)
                 if ai_review and (cooldown_until or wd.get("decision") in {"EXPIRED", "WAIT_EXPIRED"}):
                     lock_released = self._release_ai_candidate_lock(item.symbol)
+                retry_symbols, retry_cooldown_until, retry_lock_released = await self._append_paper_top_retry_candidates(
+                    candidates,
+                    candidate_source,
+                    performance_context,
+                    attempted_candidate_symbols,
+                    item,
+                    cooldown_current=not bool(cooldown_until),
+                )
+                cooldown_until = cooldown_until or retry_cooldown_until
+                lock_released = lock_released or retry_lock_released
                 observation = self._record_decision_observation(
                     item=item,
                     plan=plan,
@@ -439,6 +449,7 @@ class AutoTrader:
                         "paper_validation_allowed": paper_validation,
                         "candidate_lock_released": lock_released,
                         "candidate_wait_cooldown_until_ms": cooldown_until,
+                        "retry_candidates_added": retry_symbols,
                         "ai_decision_observation": observation,
                     }
                 )
@@ -548,6 +559,13 @@ class AutoTrader:
                 performance = plan.raw.get("performance_guard", {})
                 learned = plan.raw.get("learned_guard", {})
                 if exec_plan.decision not in ["OPEN", "PAPER_ONLY"]:
+                    retry_symbols, cooldown_until, lock_released = await self._append_paper_top_retry_candidates(
+                        candidates,
+                        candidate_source,
+                        performance_context,
+                        attempted_candidate_symbols,
+                        item,
+                    )
                     observation = self._record_decision_observation(
                         item=item,
                         plan=plan,
@@ -578,6 +596,9 @@ class AutoTrader:
                             "reason": exec_plan.reason,
                             "paper_validation_allowed": paper_validation,
                             "drift_regenerated": bool(plan.raw.get("drift_regeneration")),
+                            "retry_candidates_added": retry_symbols,
+                            "candidate_lock_released": lock_released,
+                            "candidate_wait_cooldown_until_ms": cooldown_until,
                             "quality": quality,
                             "performance": performance,
                             "learned_guard": learned,
@@ -1264,6 +1285,8 @@ class AutoTrader:
                 continue
             if getattr(item, "direction", "") not in {"LONG", "SHORT"}:
                 continue
+            if source == "paper_top" and symbol in self.ai_candidate_wait_cooldowns:
+                continue
             if position_registry.has_symbol(symbol):
                 continue
             seen.add(symbol)
@@ -1335,6 +1358,52 @@ class AutoTrader:
             if len(out) >= max_attempts - len(attempted_symbols):
                 break
         return out
+
+    async def _append_paper_top_retry_candidates(
+        self,
+        candidates: list,
+        candidate_source: str,
+        performance_context: dict[str, Any],
+        attempted_symbols: set[str],
+        rejected_item,
+        *,
+        cooldown_current: bool = True,
+    ) -> tuple[list[str], int, bool]:
+        if str(candidate_source or "") != "paper_top":
+            return [], 0, False
+        if len([symbol for symbol in attempted_symbols if symbol]) >= 3:
+            return [], 0, False
+
+        cooldown_until = 0
+        if cooldown_current:
+            cooldown_until = self._cooldown_paper_top_attempt(rejected_item)
+        lock_released = self._release_ai_candidate_lock(str(getattr(rejected_item, "symbol", "") or ""))
+        retry_candidates = await self._retry_candidates_after_pre_ai_stale(
+            candidate_source,
+            performance_context,
+            attempted_symbols,
+        )
+        if not retry_candidates:
+            return [], cooldown_until, lock_released
+
+        existing_symbols = {str(getattr(row, "symbol", "") or "") for row in candidates}
+        retry_symbols = []
+        for retry_item in retry_candidates:
+            retry_symbol = str(getattr(retry_item, "symbol", "") or "")
+            if retry_symbol and retry_symbol not in existing_symbols:
+                candidates.append(retry_item)
+                existing_symbols.add(retry_symbol)
+                retry_symbols.append(retry_symbol)
+        return retry_symbols, cooldown_until, lock_released
+
+    def _cooldown_paper_top_attempt(self, item) -> int:
+        symbol = str(getattr(item, "symbol", "") or "")
+        if not symbol:
+            return 0
+        cooldown_seconds = max(60, int(settings.ai_candidate_lock_seconds or 180))
+        until = now_ms() + cooldown_seconds * 1000
+        self.ai_candidate_wait_cooldowns[symbol] = until
+        return until
 
     def candidate_lock_status(self) -> dict[str, Any]:
         if not self.ai_candidate_lock:

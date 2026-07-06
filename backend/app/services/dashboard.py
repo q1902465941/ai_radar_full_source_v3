@@ -102,3 +102,41 @@ def build_dashboard_overview(radar_engine: object) -> dict[str, object]:
             "scan_status": scan_status if isinstance(scan_status, dict) else {},
         },
     }
+
+
+def build_dashboard_overview_from_live_payload(payload: dict[str, Any]) -> dict[str, object]:
+    return build_dashboard_overview(_LiveRadarAdapter(payload))
+
+
+class _LiveRadarAdapter:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        scan_status = payload.get("scan_status") if isinstance(payload.get("scan_status"), dict) else {}
+        self.top50 = payload.get("top50") if isinstance(payload.get("top50"), list) else []
+        top4 = payload.get("top4") or payload.get("top5_confirmed") or payload.get("trade_top5")
+        self.top4 = top4 if isinstance(top4, list) else []
+        self.last_scan_id = payload.get("last_scan_id") or scan_status.get("last_scan_id") or ""
+        self.last_scan_time = payload.get("last_scan_time") or scan_status.get("last_scan_time") or ""
+        self.market_heat = _number_or_average(payload.get("market_heat"), self.top50[:20])
+        self.alert_count = _number_or_default(payload.get("alert_count"), len(self.top4))
+        self._scan_status = scan_status
+
+    def scan_status(self) -> dict[str, Any]:
+        return self._scan_status
+
+
+def _number_or_default(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _number_or_average(value: Any, rows: list[Any]) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        pass
+    items = [_item_dict(row) for row in rows]
+    if not items:
+        return 0
+    return round(sum(float(item.get("score") or 0.0) for item in items) / len(items))

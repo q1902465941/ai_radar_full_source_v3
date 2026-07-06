@@ -38,6 +38,16 @@ def test_docker_compose_passes_mainnet_market_runtime_env_to_backend_services():
     assert "BINANCE_ASCII_SYMBOLS_ONLY: ${BINANCE_ASCII_SYMBOLS_ONLY:-true}" in compose
     assert "BINANCE_API_KEY: ${BINANCE_API_KEY:-}" in compose
     assert "BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}" in compose
+    assert "AUTO_TRADING_CANDIDATE_MODE: ${AUTO_TRADING_CANDIDATE_MODE:-paper_top}" in compose
+    assert "AUTO_TRADING_CANDIDATE_MIN_SCORE: ${AUTO_TRADING_CANDIDATE_MIN_SCORE:-70}" in compose
+    assert "AUTO_TRADING_CANDIDATE_LIMIT: ${AUTO_TRADING_CANDIDATE_LIMIT:-1}" in compose
+    assert "PAPER_PROBE_ENABLED: ${PAPER_PROBE_ENABLED:-true}" in compose
+    assert "PAPER_PROBE_MIN_SCORE_FLOOR: ${PAPER_PROBE_MIN_SCORE_FLOOR:-18}" in compose
+    assert "PAPER_PROBE_MIN_FUND_CONFIRM: ${PAPER_PROBE_MIN_FUND_CONFIRM:-1}" in compose
+    assert "PAPER_PROBE_MIN_DIRECTION_CONFIRMATIONS: ${PAPER_PROBE_MIN_DIRECTION_CONFIRMATIONS:-4}" in compose
+    assert "PAPER_PROBE_MAX_WICK_RATIO: ${PAPER_PROBE_MAX_WICK_RATIO:-0.55}" in compose
+    assert "MONITOR_LEGACY_BACKEND_URL: ${MONITOR_LEGACY_BACKEND_URL:-http://backend:8001}" in compose
+    assert "MONITOR_LEGACY_DB_FALLBACK_ENABLED: ${MONITOR_LEGACY_DB_FALLBACK_ENABLED:-true}" in compose
     assert "AI_STRATEGY_PROVIDER: ${AI_STRATEGY_PROVIDER:-rule}" in compose
     assert "REQUIRE_CODEX_STRATEGY_FOR_ENTRY: ${REQUIRE_CODEX_STRATEGY_FOR_ENTRY:-false}" in compose
     assert "DB_PATH: ${DOCKER_DB_PATH:-data/ai_radar.db}" in compose
@@ -59,6 +69,13 @@ def test_frontend_nginx_routes_legacy_monitor_by_default_and_v2_api_separately()
     assert "try_files $uri $uri/ /index.html" not in nginx
 
 
+def test_frontend_nginx_allows_long_running_api_calls():
+    nginx = (ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
+
+    assert "proxy_read_timeout 300s;" in nginx
+    assert "proxy_send_timeout 300s;" in nginx
+
+
 def test_env_example_defaults_to_mainnet_public_market_data():
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
 
@@ -69,6 +86,8 @@ def test_env_example_defaults_to_mainnet_public_market_data():
     assert "AI_STRATEGY_PROVIDER=rule" in env_example
     assert "REQUIRE_CODEX_STRATEGY_FOR_ENTRY=false" in env_example
     assert "DOCKER_DB_PATH=data/ai_radar.db" in env_example
+    assert "MONITOR_LEGACY_BACKEND_URL=" in env_example
+    assert "MONITOR_LEGACY_BACKEND_URL=http://backend:8001" not in env_example
     assert "MARKET_DATA_MODE=mock" not in env_example
     assert "BINANCE_TESTNET=true" not in env_example
 

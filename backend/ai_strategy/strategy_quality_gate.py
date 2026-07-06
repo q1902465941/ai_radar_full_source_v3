@@ -47,6 +47,7 @@ class StrategyQualityGate:
         win_rate = self._blend_geometry_win_rate(win_rate, geometry_sample)
         expected_r = win_rate * avg_reward_r - (1.0 - win_rate)
         expected_r = self._blend_geometry_expected_r(expected_r, geometry_sample)
+        paper_validation = bool(plan.raw.get("paper_validation")) if isinstance(plan.raw, dict) else False
 
         min_paper_confidence = float(settings.strategy_min_paper_confidence)
         if plan.confidence < min_paper_confidence:
@@ -79,8 +80,12 @@ class StrategyQualityGate:
         reasons.extend(geometry_reasons)
         geometry_blocked = any(reason.startswith("strategy_geometry_") for reason in geometry_reasons)
 
+        min_paper_win_rate = float(settings.strategy_min_paper_win_rate)
+        if paper_validation:
+            min_paper_win_rate = max(0.50, min_paper_win_rate - 0.03)
+
         paper_ok = (
-            win_rate >= settings.strategy_min_paper_win_rate
+            win_rate >= min_paper_win_rate
             and expected_r >= settings.strategy_min_expected_r
             and tp2_r >= settings.strategy_min_tp2_r
             and cost_r <= 0.45
@@ -89,8 +94,8 @@ class StrategyQualityGate:
             and wick_ok
             and full_fund_confirm
             and (item.direction == "NEUTRAL" or plan.side == item.direction)
-            and calibration.paper_ok
-            and attribution.paper_ok
+            and (calibration.paper_ok or paper_validation)
+            and (attribution.paper_ok or paper_validation)
             and not geometry_blocked
         )
         live_ok = (

@@ -3362,6 +3362,100 @@ def test_strategy_quality_gate_uses_event_calibration_to_block_bad_similar_event
     assert "event_calibrated_win_rate_low" in report.reasons
     assert report.calibration["matched_samples"] >= 4
 
+
+def test_strategy_quality_gate_reviews_event_calibration_for_paper_validation(monkeypatch):
+    monkeypatch.setattr(settings, "event_calibration_enabled", True)
+    monkeypatch.setattr(settings, "event_calibration_min_samples", 4)
+    monkeypatch.setattr(settings, "event_calibration_min_win_rate", 0.6)
+    monkeypatch.setattr(settings, "event_calibration_min_profit_factor", 1.2)
+    monkeypatch.setattr(settings, "event_calibration_min_pnl", 0.0)
+    monkeypatch.setattr(
+        trade_attributor,
+        "evaluate",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            paper_ok=False,
+            live_ok=False,
+            reasons=["causal_pattern_win_rate_low"],
+            asdict=lambda: {"paper_ok": False, "live_ok": False, "reasons": ["causal_pattern_win_rate_low"]},
+        ),
+    )
+    samples = [
+        sample_trade(side="LONG", pnl=-1.0, close_time=1),
+        sample_trade(side="LONG", pnl=-0.8, close_time=2),
+        sample_trade(side="LONG", pnl=-0.6, close_time=3),
+        sample_trade(side="LONG", pnl=0.2, close_time=4),
+    ]
+    monkeypatch.setattr(event_calibrator, "_samples", lambda: samples)
+    item = high_quality_item(side="LONG")
+    plan = StrategyPlan(
+        strategy_id="paper_validation_event_review",
+        action="OPEN_LONG",
+        symbol=item.symbol,
+        side="LONG",
+        entry_zone_low=100,
+        entry_zone_high=100,
+        ideal_entry_price=100,
+        stop_loss=99,
+        tp1=101,
+        tp2=103,
+        confidence=90,
+        reason="paper validation should collect forward evidence",
+        raw={"paper_validation": {"source": "paper_top"}},
+    )
+
+    report = strategy_quality_gate.evaluate(item, plan)
+
+    assert report.paper_ok is True
+    assert report.live_ok is False
+    assert "event_calibrated_win_rate_low" in report.reasons
+    assert "causal_pattern_win_rate_low" in report.reasons
+    assert report.calibration["paper_ok"] is False
+    assert report.attribution["paper_ok"] is False
+
+
+def test_strategy_quality_gate_allows_positive_ev_borderline_win_rate_for_paper_validation(monkeypatch):
+    monkeypatch.setattr(settings, "strategy_min_paper_win_rate", 0.53)
+    monkeypatch.setattr(settings, "event_calibration_enabled", False)
+    monkeypatch.setattr(
+        trade_attributor,
+        "evaluate",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            paper_ok=True,
+            live_ok=False,
+            reasons=[],
+            asdict=lambda: {"paper_ok": True, "live_ok": False, "reasons": []},
+        ),
+    )
+    monkeypatch.setattr(strategy_quality_gate, "_estimate_win_rate", lambda *_args, **_kwargs: (0.515, ["borderline_positive_ev"]))
+    item = high_quality_item(side="LONG")
+    plan = StrategyPlan(
+        strategy_id="borderline_validation",
+        action="OPEN_LONG",
+        symbol=item.symbol,
+        side="LONG",
+        entry_zone_low=100,
+        entry_zone_high=100,
+        ideal_entry_price=100,
+        stop_loss=99,
+        tp1=101,
+        tp2=103,
+        confidence=90,
+        reason="positive EV validation",
+        raw={"paper_validation": {"source": "paper_top"}},
+    )
+    formal_plan = StrategyPlan(
+        **{**plan.__dict__, "strategy_id": "borderline_formal", "raw": {}}
+    )
+
+    validation_report = strategy_quality_gate.evaluate(item, plan)
+    formal_report = strategy_quality_gate.evaluate(item, formal_plan)
+
+    assert validation_report.estimated_win_rate == 0.515
+    assert validation_report.expected_r >= settings.strategy_min_expected_r
+    assert validation_report.paper_ok is True
+    assert formal_report.paper_ok is False
+
+
 def test_event_calibrator_allows_paper_when_recent_similar_events_recovered(monkeypatch):
     monkeypatch.setattr(settings, "event_calibration_enabled", True)
     monkeypatch.setattr(settings, "event_calibration_min_samples", 3)
@@ -3676,7 +3770,7 @@ def test_trade_attributor_releases_pattern_block_after_recent_matched_recovery(m
     assert "causal_pattern_win_rate_low" not in report.reasons
     assert "causal_pattern_profit_factor_low" not in report.reasons
 
-def test_learned_risk_guard_blocks_low_trust_negative_pattern(monkeypatch):
+def test_learned_risk_guard_reviews_low_trust_negative_pattern_without_blocking_paper(monkeypatch):
     monkeypatch.setattr(settings, "trade_attribution_enabled", True)
     monkeypatch.setattr(settings, "trade_learning_guard_enabled", True)
     monkeypatch.setattr(
@@ -3710,8 +3804,9 @@ def test_learned_risk_guard_blocks_low_trust_negative_pattern(monkeypatch):
 
     report = learned_risk_guard.evaluate(high_quality_item(side="LONG"), None, recovery_mode=False)
 
-    assert report.allow_paper is False
-    assert report.severity == "BLOCK"
+    assert report.allow_paper is True
+    assert report.allow_live is False
+    assert report.severity == "REVIEW"
     assert "learning_data_not_production_grade" in report.reasons
     assert "causal_pattern_win_rate_low" in report.reasons
 
@@ -3762,6 +3857,102 @@ def test_learned_risk_guard_allows_positive_matched_pattern_over_factor_blocks(m
     assert not report.hard_blocks
     assert all(not reason.startswith("causal_factor_negative:") for reason in report.reasons)
     assert "learned_block:wick_high" not in report.reasons
+
+
+def test_autotrader_low_trust_learning_review_reaches_strategy_generation(monkeypatch):
+    symbol = "LOWTRUSTPAPERUSDT"
+    cleanup_symbol(symbol)
+    position_registry.open.clear()
+    autotrader.executed_strategy_ids.clear()
+    item = high_quality_item(symbol=symbol, side="LONG", price=100)
+    item.rank = 1
+    item.fund_confirm_count = 3
+    generated = {"called": False}
+
+    monkeypatch.setattr(settings, "trade_attribution_enabled", True)
+    monkeypatch.setattr(settings, "trade_learning_guard_enabled", True)
+    monkeypatch.setattr(settings, "auto_trading_use_active_strategy_filter", False)
+    monkeypatch.setattr(settings, "max_open_positions", 1)
+    monkeypatch.setattr(radar_engine, "top50", [item])
+    monkeypatch.setattr(strategy_registry, "active", lambda: None)
+    monkeypatch.setattr(performance_guard, "summary", lambda: {"recovery_mode": False, "pnl": 0, "trades": 0, "win_rate": 0, "recent_win_rate": 0, "loss_streak": 0})
+    monkeypatch.setattr(performance_guard, "precheck_candidate", lambda candidate: (True, ""))
+    monkeypatch.setattr(
+        learning_data_audit,
+        "compact",
+        lambda: {"can_hard_block_from_learning": False, "trust_level": "LOW", "reasons": ["real_closed_samples_low"]},
+    )
+
+    class NegativeAttribution:
+        current_factors = ["wick_high"]
+        matched_samples = 32
+        match_level = "relaxed_physical_structure"
+        win_rate = 0.25
+        profit_factor = 0.4
+        pnl = -6.0
+        paper_ok = False
+        live_ok = False
+        reasons = ["causal_pattern_win_rate_low", "causal_factor_negative:wick_high"]
+        advice = ["negative pattern"]
+
+        def asdict(self):
+            return {
+                "matched_samples": self.matched_samples,
+                "win_rate": self.win_rate,
+                "profit_factor": self.profit_factor,
+                "pnl": self.pnl,
+                "reasons": self.reasons,
+            }
+
+    monkeypatch.setattr(trade_attributor, "evaluate", lambda item_arg, plan: NegativeAttribution())
+    monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([item], "strict"))
+    monkeypatch.setattr(autotrader, "_market_data_ok", lambda: (True, ""))
+
+    async def geometry_order(candidates, candidate_source, performance_context):
+        return candidates, {}
+
+    async def account_context(open_positions):
+        return {}, {"equity": 1000, "available_balance": 1000, "open_positions": 0, "max_open_positions": 1, "trade_mode": "paper"}
+
+    async def prepare_latest(latest_item, *, force_scan):
+        return latest_item, {"scan_ok": True, "symbol_present_after_scan": True, "item_age_seconds": 0}
+
+    async def generate_plan(plan_item, account, performance_context, candidate_source, paper_probe, paper_validation, selected_strategy, **kwargs):
+        generated["called"] = True
+        return StrategyPlan(
+            strategy_id="low_trust_review_wait",
+            action="WAIT",
+            symbol=plan_item.symbol,
+            side=plan_item.direction,
+            entry_zone_low=0,
+            entry_zone_high=0,
+            ideal_entry_price=0,
+            stop_loss=0,
+            tp1=0,
+            tp2=0,
+            confidence=0,
+            reason="review continued to strategy generation",
+            wait_type="WAIT_FOR_CONFIRMATION",
+        )
+
+    monkeypatch.setattr(autotrader, "_geometry_supported_candidate_order", geometry_order)
+    monkeypatch.setattr(autotrader, "_account_context", account_context)
+    monkeypatch.setattr(autotrader, "_prepare_latest_item_for_ai", prepare_latest)
+    monkeypatch.setattr(autotrader, "_pre_trade_price_ok", lambda report: (True, ""))
+    monkeypatch.setattr(autotrader, "_ai_candidate_freshness_report", lambda *args, **kwargs: (True, {"reasons": []}))
+    monkeypatch.setattr(autotrader, "_generate_strategy_plan", generate_plan)
+    monkeypatch.setattr(strategy_validator, "validate", lambda plan: (True, ""))
+    monkeypatch.setattr("backend.trading.autotrader.wait_manager.evaluate", lambda item_arg, plan: {"decision": "WAIT", "reason": "strategy_wait"})
+
+    try:
+        result = asyncio.run(autotrader._run_once_locked())
+
+        assert generated["called"] is True
+        assert result["results"][0]["decision"] == "WAIT"
+        assert result["results"][0]["reason"] == "strategy_wait"
+    finally:
+        cleanup_symbol(symbol)
+
 
 def test_learned_risk_guard_allows_proven_reverse_candidate(monkeypatch):
     monkeypatch.setattr(settings, "trade_attribution_enabled", True)
@@ -5828,6 +6019,138 @@ def test_paper_top_ai_open_creates_paper_validation_position(monkeypatch):
         assert opened[0].strategy_contract["allowed_stages"]["live"] is False
     finally:
         cleanup_symbol(symbol)
+
+
+def test_paper_top_retries_next_candidate_after_quality_rejection(monkeypatch):
+    first_symbol = "TOPREJECTUSDT"
+    second_symbol = "TOPRETRYUSDT"
+    cleanup_symbol(first_symbol)
+    cleanup_symbol(second_symbol)
+    position_registry.open.clear()
+    autotrader.executed_strategy_ids.clear()
+    autotrader.ai_candidate_lock.clear()
+    autotrader.ai_candidate_wait_cooldowns.clear()
+    first = high_quality_item(symbol=first_symbol, side="LONG", price=100)
+    first.rank = 1
+    first.score = 92
+    second = high_quality_item(symbol=second_symbol, side="LONG", price=100)
+    second.rank = 2
+    second.score = 88
+    monkeypatch.setattr(settings, "trade_mode", "live")
+    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    monkeypatch.setattr(settings, "auto_trading_candidate_mode", "paper_top")
+    monkeypatch.setattr(settings, "auto_trading_candidate_limit", 1)
+    monkeypatch.setattr(settings, "auto_trading_candidate_min_score", 55.0)
+    monkeypatch.setattr(settings, "max_open_positions", 1)
+    monkeypatch.setattr(settings, "paper_account_equity_usdt", 1000.0)
+    monkeypatch.setattr(settings, "trade_min_net_profit_usdt", 0.2)
+    monkeypatch.setattr(settings, "trade_min_profit_cost_ratio", 1.0)
+    monkeypatch.setattr(radar_engine, "top50", [first, second])
+    monkeypatch.setattr(radar_engine, "last_scan_id", "scan_retry_quality")
+    monkeypatch.setattr(strategy_registry, "active", lambda: None)
+    monkeypatch.setattr(
+        performance_guard,
+        "summary",
+        lambda: {
+            "recovery_mode": False,
+            "pnl": 0,
+            "trades": 0,
+            "win_rate": 0,
+            "recent_win_rate": 0,
+            "loss_streak": 0,
+        },
+    )
+
+    async def fake_scan(force_refresh=False):
+        return radar_engine.top50
+
+    async def fake_prepare(item, *, force_scan):
+        return item, {
+            "market_refresh_degraded": False,
+            "trade_price": {
+                "ok": True,
+                "stale": False,
+                "safe_for_execution": True,
+                "error": "",
+                "price": item.price,
+                "source": "book_ticker_mid",
+            },
+            "symbol_present_after_scan": True,
+        }
+
+    async def fake_generate_strategy_plan(review_item, *args, **kwargs):
+        plan = rule_strategy_generator.generate_probe(review_item)
+        plan.raw["provider"] = "codex_cli"
+        plan.raw["strategy_contract"] = build_rule_contract(review_item, plan)
+        return plan
+
+    risk_calls = []
+
+    def fake_decide(review_item, plan, account, market, paper_probe=False):
+        risk_calls.append(review_item.symbol)
+        if review_item.symbol == first_symbol:
+            return ExecutionPlan(
+                decision="OBSERVE",
+                mode="paper",
+                symbol=plan.symbol,
+                side=plan.side,
+                dynamic_margin=0,
+                dynamic_leverage=1,
+                quantity=0,
+                entry_price=plan.ideal_entry_price,
+                stop_loss=plan.stop_loss,
+                tp1=plan.tp1,
+                tp2=plan.tp2,
+                tp1_close_ratio=0.0,
+                tp2_close_ratio=0.0,
+                management_mode="OBSERVE",
+                cooldown_after_trade=0,
+                reason="quality rejected: test first candidate",
+            )
+        return feedback_exec_plan(plan)
+
+    monkeypatch.setattr(radar_engine, "scan", fake_scan)
+    monkeypatch.setattr(autotrader, "_prepare_latest_item_for_ai", fake_prepare)
+    monkeypatch.setattr(autotrader, "_generate_strategy_plan", fake_generate_strategy_plan)
+    monkeypatch.setattr("backend.trading.autotrader.auto_trading_risk_model.decide", fake_decide)
+
+    try:
+        result = asyncio.run(autotrader._run_once_locked())
+        opened = position_registry.list_open()
+
+        assert risk_calls == [first_symbol, second_symbol]
+        assert result["results"][0]["decision"] == "OBSERVE"
+        assert result["results"][0]["retry_candidates_added"] == [second_symbol]
+        assert result["results"][1]["decision"] == "OPEN_PAPER_VALIDATION"
+        assert result["results"][1]["symbol"] == second_symbol
+        assert len(opened) == 1
+        assert opened[0].symbol == second_symbol
+    finally:
+        cleanup_symbol(first_symbol)
+        cleanup_symbol(second_symbol)
+
+
+def test_paper_top_geometry_retry_pool_excludes_wait_cooldown_candidate(monkeypatch):
+    first = high_quality_item(symbol="COOLDOWNPOOLUSDT", side="LONG", price=100)
+    first.rank = 1
+    first.score = 92
+    second = high_quality_item(symbol="NEXTPOOLUSDT", side="LONG", price=100)
+    second.rank = 2
+    second.score = 88
+    monkeypatch.setattr(settings, "auto_trading_candidate_mode", "paper_top")
+    monkeypatch.setattr(settings, "auto_trading_candidate_limit", 1)
+    monkeypatch.setattr(settings, "trade_mode", "live")
+    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    monkeypatch.setattr(radar_engine, "top50", [first, second])
+    autotrader.ai_candidate_wait_cooldowns[first.symbol] = now_ms() + 180_000
+
+    try:
+        pool = autotrader._geometry_candidate_pool([second], "paper_top", {"recovery_mode": False})
+
+        assert first.symbol not in [item.symbol for item in pool]
+        assert [item.symbol for item in pool][:1] == [second.symbol]
+    finally:
+        autotrader.ai_candidate_wait_cooldowns.pop(first.symbol, None)
 
 
 def test_autotrader_does_not_live_execute_when_exec_plan_mode_is_paper(monkeypatch):

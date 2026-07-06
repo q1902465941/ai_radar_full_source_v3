@@ -31,7 +31,7 @@ and `scripts/stop_local_stack.ps1`.
 
 Evidence from the latest local run:
 
-- Backend tests: `373 passed`
+- Backend tests: `381 passed`
 - Frontend tests: `5 files / 8 tests passed`
 - Frontend production build: passed
 - Backend smoke: `/api/v2/health` returned service `ai-radar-api`
@@ -143,7 +143,7 @@ hardening mainnet market data:
   longer includes `AI Radar Control Center`.
 - Docker landing verification: `scripts/verify_docker_stack.ps1` completed.
 - Latest Docker verification checked 8 radar prices with worst drift
-  `KMNOUSDT 0.312%`, checked 77 monitor/active symbols as supported USD-M
+  `MOVRUSDT 0.138%`, checked 76 monitor/active symbols as supported USD-M
   ASCII contracts, matched `10/10` active ticker priority candidates, reported
   paper graduation `real_closed=0/30 missing=30`, and completed the controlled
   paper closed loop.
@@ -183,6 +183,17 @@ hardening mainnet market data:
 - Radar scan: `/api/radar/scan-now` and `/api/radar` returned non-empty top50
   data with `market_refresh.degraded=false`, `refresh_source=ws_ticker`,
   active pool `120`, and top50 count `50`.
+- v2 monitor data source: `/api/v2/radar/scans/latest` and
+  `/api/v2/dashboard/overview` now prefer the detailed monitor's live
+  `/api/radar` payload instead of stale v2 in-process/persisted state. Latest
+  direct Docker check showed legacy scan id `50210c13659d`, v2 scan id
+  `50210c13659d`, v2 source `legacy_live`, legacy/v2 top50 `50/50`, first
+  symbol `REUSDT`, overview top50 `50`, and active/dynamic stream counts
+  `120/120`.
+- Proxied long API calls: `/api/autotrade/run-once` through
+  `http://127.0.0.1:8080` completed in `79.6s` without an Nginx `504`. The
+  request returned three paper-top attempts, starting with
+  `BREVUSDT -> SKIP_STALE_CANDIDATE`, and added retry candidate `TRBUSDT`.
 
 ## Controlled Paper Closed Loop
 
@@ -199,8 +210,12 @@ LIVE_TRADING_ENABLED=false
 Evidence from 2026-07-06:
 
 - `/api/system/readiness` status: `DEGRADED`, not `BLOCKED`. Latest check after
-  Docker verification showed 6 readiness blockers, all still visible as
-  wait/live-graduation gates rather than Docker startup failure.
+  Docker verification and a proxied run-once still showed live-graduation
+  blockers rather than Docker startup failure: `radar_scan_running`
+  (transient), `ai_wait_cooldowns_active`,
+  `learning_data_not_production_grade`, `paper_win_rate_low`,
+  `recent_win_rate_low`, `paper_pnl_not_positive`,
+  `exchange_reconciliation_stale`, and `prg_not_micro_live_eligible`.
 - Codex entry gate: `required_for_entry=false`.
 - Paper loop guard: `ok=true`, reason `paper_closed_loop_sampling`.
 - Codex-related wait/paper-entry blockers: none.
@@ -208,6 +223,9 @@ Evidence from 2026-07-06:
   evidence after the latest rebuild showed `real_closed=0/30`, `missing=30`,
   and trust `LOW`, so the paper/shadow loop is usable while live graduation
   remains blocked.
+- Paper-top sampling now cools down rejected candidates, releases the candidate
+  lock, and retries additional top candidates in the same run so a single stale
+  or quality-rejected symbol no longer stalls the sampling loop.
 - If a normal paper position is already open, readiness can still report
   `ai_not_invoked` or `open_position_exists`; that is a capacity/position
   management wait state, not a Codex or market-data startup blocker.

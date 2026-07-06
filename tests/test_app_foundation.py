@@ -237,6 +237,85 @@ def test_v2_latest_radar_scan_route_returns_persisted_scan(tmp_path):
     assert detail_candidate["raw"] == {"symbol": "ETHUSDT", "score": 77.5}
 
 
+def test_v2_latest_radar_scan_prefers_live_legacy_monitor_over_stale_v2_scan(tmp_path, monkeypatch):
+    db_path = tmp_path / "app.db"
+    engine = build_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+
+    with session_scope(SessionLocal) as session:
+        session.add(
+            RadarScanRecord(
+                scan_id="stale-v2-scan",
+                state="succeeded",
+                source="v2_task",
+                top50_count=1,
+                market_heat=12,
+            )
+        )
+        session.add(
+            RadarCandidateRecord(
+                scan_id="stale-v2-scan",
+                symbol="OLDUSDT",
+                rank=1,
+                score=11,
+                direction="SHORT",
+            )
+        )
+
+    async def fake_live_payload():
+        return {
+            "ok": True,
+            "last_scan_id": "live-scan",
+            "top50": [
+                {
+                    "symbol": "LIVEUSDT",
+                    "base_asset": "LIVE",
+                    "rank": 1,
+                    "score": 88,
+                    "direction": "LONG",
+                    "price": 1.23,
+                    "change_5m": 0.6,
+                    "change_15m": 1.2,
+                    "change_1h": 3.4,
+                    "oi_change": 2.1,
+                    "fund_confirm_count": 4,
+                    "fund_confirm_total": 5,
+                    "fake_breakout_risk": "LOW",
+                    "ai_candidate": True,
+                    "market_structure": {"action": "OPEN_LONG"},
+                    "score_features": {"source": "live"},
+                    "score_explain": {"why": "fresh"},
+                }
+            ],
+            "top4": [
+                {
+                    "symbol": "LIVEUSDT",
+                    "rank": 1,
+                    "score": 88,
+                    "direction": "LONG",
+                    "ai_candidate": True,
+                }
+            ],
+            "scan_status": {"last_scan_time": "03:33:33"},
+        }
+
+    monkeypatch.setattr(radar_api, "fetch_live_radar_payload", fake_live_payload)
+    client = TestClient(create_app(session_factory=SessionLocal, initialize_database=False))
+
+    response = client.get("/api/v2/radar/scans/latest?include_details=true")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["scan"]["scan_id"] == "live-scan"
+    assert data["scan"]["source"] == "legacy_live"
+    assert data["scan"]["top50_count"] == 1
+    assert data["candidates"][0]["symbol"] == "LIVEUSDT"
+    assert data["candidates"][0]["score_features"] == {"source": "live"}
+    assert data["candidates"][0]["raw"]["symbol"] == "LIVEUSDT"
+
+
 def test_v2_dashboard_overview_summarizes_existing_radar_state(monkeypatch):
     class FakeRadarEngine:
         last_scan_id = "scan-dashboard"
@@ -322,3 +401,76 @@ def test_v2_dashboard_overview_summarizes_existing_radar_state(monkeypatch):
         "regime": "breakout",
         "phase": "actionable",
     }
+
+
+def test_v2_dashboard_overview_prefers_live_legacy_monitor_source(monkeypatch):
+    class EmptyV2RadarEngine:
+        last_scan_id = ""
+        last_scan_time = ""
+        market_heat = 0
+        alert_count = 0
+        top4 = []
+        top50 = []
+
+        def scan_status(self):
+            return {"active_coins": {"active_count": 0}, "dynamic_stream": {"active_count": 0}}
+
+    async def fake_live_payload():
+        return {
+            "ok": True,
+            "last_scan_id": "live-dashboard",
+            "top50": [
+                {
+                    "symbol": "BTCUSDT",
+                    "base_asset": "BTC",
+                    "direction": "LONG",
+                    "score": 90,
+                    "ai_candidate": True,
+                    "fund_confirm_count": 4,
+                    "fake_breakout_risk": "LOW",
+                    "market_structure": {"action": "OPEN_LONG", "regime": "breakout", "phase": "actionable"},
+                },
+                {
+                    "symbol": "ETHUSDT",
+                    "base_asset": "ETH",
+                    "direction": "SHORT",
+                    "score": 70,
+                    "ai_candidate": False,
+                    "fund_confirm_count": 2,
+                    "fake_breakout_risk": "HIGH",
+                    "market_structure": {"action": "WAIT", "regime": "pullback", "phase": "watch"},
+                },
+            ],
+            "top4": [
+                {
+                    "symbol": "BTCUSDT",
+                    "base_asset": "BTC",
+                    "direction": "LONG",
+                    "score": 90,
+                    "ai_candidate": True,
+                    "fund_confirm_count": 4,
+                    "fake_breakout_risk": "LOW",
+                    "market_structure": {"action": "OPEN_LONG", "regime": "breakout", "phase": "actionable"},
+                }
+            ],
+            "scan_status": {
+                "last_scan_time": "03:44:44",
+                "active_coins": {"active_count": 120},
+                "dynamic_stream": {"active_count": 120},
+            },
+        }
+
+    monkeypatch.setattr(dashboard_api, "radar_engine", EmptyV2RadarEngine())
+    monkeypatch.setattr(dashboard_api, "fetch_live_radar_payload", fake_live_payload)
+    client = TestClient(create_app())
+
+    response = client.get("/api/v2/dashboard/overview")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["scan"]["last_scan_id"] == "live-dashboard"
+    assert data["scan"]["last_scan_time"] == "03:44:44"
+    assert data["metrics"]["top50_count"] == 2
+    assert data["metrics"]["active_coin_count"] == 120
+    assert data["metrics"]["dynamic_stream_count"] == 120
+    assert data["candidates"][0]["symbol"] == "BTCUSDT"
