@@ -213,6 +213,23 @@ def test_codex_paper_sampling_script_calls_probe_and_reports_evidence():
     assert "BINANCE_API_SECRET" not in script
 
 
+def test_codex_paper_sample_watch_script_tracks_close_without_forcing_exit():
+    script = (ROOT / "scripts" / "watch_codex_paper_sample.ps1").read_text(encoding="utf-8")
+
+    assert "api/trade-director/codex-paper-probe" in script
+    assert "api/positions" in script
+    assert "api/system/readiness" in script
+    assert "codex_real_closed_samples_with_radar" in script
+    assert "OPEN_POSITION_PENDING_CLOSE" in script
+    assert "MaxWaitSeconds" in script
+    assert "NoFailOnTimeout" in script
+    assert "manual-close" not in script
+    assert "close_position" not in script
+    assert "X-API-Token" in script
+    assert 'Write-Host "$apiToken' not in script
+    assert "BINANCE_API_SECRET" not in script
+
+
 def test_enable_codex_strategy_mode_script_persists_host_env_without_leaking_secrets(tmp_path):
     script = ROOT / "scripts" / "enable_codex_strategy_mode.ps1"
     env_path = tmp_path / ".env"
