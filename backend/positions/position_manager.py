@@ -795,10 +795,20 @@ class PositionManager:
         return ""
 
     def _max_hold_expired(self, p: Position) -> bool:
-        if settings.position_max_hold_seconds <= 0:
+        max_hold_seconds = self._max_hold_seconds(p)
+        if max_hold_seconds <= 0:
             return False
         age_s = (now_ms() - p.open_time) / 1000
-        return age_s >= settings.position_max_hold_seconds and p.roi <= 0
+        return age_s >= max_hold_seconds and p.roi <= 0
+
+    def _max_hold_seconds(self, p: Position) -> int:
+        configured = int(settings.position_max_hold_seconds or 0)
+        contract = p.strategy_contract if isinstance(p.strategy_contract, dict) else {}
+        time_stop = contract.get("time_stop") if isinstance(contract.get("time_stop"), dict) else {}
+        contract_seconds = _safe_positive_int(time_stop.get("seconds"))
+        if configured > 0 and contract_seconds > 0:
+            return min(configured, contract_seconds)
+        return contract_seconds or configured
 
     def _risk_unit(self, p: Position) -> float:
         self._ensure_position_risk_state(p)
@@ -974,3 +984,11 @@ def _safe_float(value, default: float = 0.0) -> float:
 
 
 position_manager = PositionManager()
+
+
+def _safe_positive_int(value) -> int:
+    try:
+        parsed = int(float(value))
+    except Exception:
+        return 0
+    return parsed if parsed > 0 else 0

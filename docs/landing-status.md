@@ -31,7 +31,7 @@ and `scripts/stop_local_stack.ps1`.
 
 Evidence from the latest local run:
 
-- Backend tests: `369 passed`
+- Backend tests: `373 passed`
 - Frontend tests: `5 files / 8 tests passed`
 - Frontend production build: passed
 - Backend smoke: `/api/v2/health` returned service `ai-radar-api`
@@ -117,7 +117,8 @@ docker compose up --build -d
 ```
 
 Docker Compose evidence from 2026-07-06 after restoring the detailed
-monitoring site as the default browser surface and fixing mainnet market data:
+monitoring site as the default browser surface, fixing Docker persistence, and
+hardening mainnet market data:
 
 - `docker compose up --build -d`: completed.
 - Backend container: `healthy`, published `0.0.0.0:8001->8001/tcp`,
@@ -128,6 +129,10 @@ monitoring site as the default browser surface and fixing mainnet market data:
   concurrent `table already exists` race seen when both gunicorn workers boot
   at the same time.
 - Frontend container: `healthy`, published `0.0.0.0:8080->80/tcp`.
+- Runtime database path: `data/ai_radar.db`, backed by the mounted
+  `./data:/app/data` volume. Compose now uses `DOCKER_DB_PATH` so a Windows
+  host `DB_PATH=E:/...` value cannot make Linux containers write to an
+  unmounted path.
 - Backend smoke: `http://127.0.0.1:8080/api/state` returned market state.
 - v2 API smoke: `http://127.0.0.1:8002/api/v2/health` returned
   `{"ok":true,"service":"ai-radar-api","version":"v2"}`.
@@ -138,8 +143,10 @@ monitoring site as the default browser surface and fixing mainnet market data:
   longer includes `AI Radar Control Center`.
 - Docker landing verification: `scripts/verify_docker_stack.ps1` completed.
 - Latest Docker verification checked 8 radar prices with worst drift
-  `TLMUSDT 0.064%`, matched `10/10` active ticker priority candidates, and
-  completed the controlled paper closed loop.
+  `KMNOUSDT 0.312%`, checked 77 monitor/active symbols as supported USD-M
+  ASCII contracts, matched `10/10` active ticker priority candidates, reported
+  paper graduation `real_closed=0/30 missing=30`, and completed the controlled
+  paper closed loop.
 - Latest browser smoke showed the 24h major-market cards, `Graduation`, the AI
   candidate queue, and the scan evidence matrix with no browser console errors.
 - Market data: `/api/state` reported `market_data_source=mainnet`; monitored
@@ -159,8 +166,9 @@ monitoring site as the default browser surface and fixing mainnet market data:
   registry replaces lower-priority entries when capacity is full. The Docker
   verifier recomputes Binance USD-M Futures high-priority movers from
   `/fapi/v1/ticker/24hr` plus `/fapi/v1/exchangeInfo` and checks that the
-  local active pool covers the top external candidates. Latest evidence:
-  `active_count=120`, top external coverage `10/10`.
+  local active pool covers the top external candidates. It also rejects
+  monitor symbols that are not supported USD-M ASCII contracts. Latest
+  evidence: top external coverage `10/10`, symbol support check `77`.
 - Graduation visibility: `/api/system/readiness` exposes
   `paper_learning.graduation_progress`, including real closed samples with
   radar context, required sample count, missing sample count, replay ratio,
@@ -168,9 +176,10 @@ monitoring site as the default browser surface and fixing mainnet market data:
   readiness cards render this as `Graduation` so the live blocker is a visible
   evidence gap, not an opaque `DEGRADED` status.
 - WebSocket ticker source: all-market ticker uses the Binance USD-M Futures
-  `/market/ws/!ticker@arr` routed path. Runtime evidence after rebuild showed
-  `refresh_source=ws_ticker`, ticker count above 600, `stale=false`, and no
-  WebSocket readiness blockers.
+  `/market/ws/!ticker@arr` routed path and filters post-CM-migration ticker
+  rows to USD-M rows (`st=1`). Runtime evidence after rebuild showed
+  `refresh_source=ws_ticker`, `market_refresh.degraded=false`, and no
+  non-ASCII symbols in radar top50 or active pool.
 - Radar scan: `/api/radar/scan-now` and `/api/radar` returned non-empty top50
   data with `market_refresh.degraded=false`, `refresh_source=ws_ticker`,
   active pool `120`, and top50 count `50`.
@@ -195,10 +204,10 @@ Evidence from 2026-07-06:
 - Codex entry gate: `required_for_entry=false`.
 - Paper loop guard: `ok=true`, reason `paper_closed_loop_sampling`.
 - Codex-related wait/paper-entry blockers: none.
-- Paper graduation progress is visible in readiness. Current runtime evidence
-  after the latest rebuild showed `real_closed=1/30`, `missing=29`, and trust
-  `LOW`, so the paper/shadow loop is usable while live graduation remains
-  blocked.
+- Paper graduation progress is visible in readiness. Current mounted Docker DB
+  evidence after the latest rebuild showed `real_closed=0/30`, `missing=30`,
+  and trust `LOW`, so the paper/shadow loop is usable while live graduation
+  remains blocked.
 - If a normal paper position is already open, readiness can still report
   `ai_not_invoked` or `open_position_exists`; that is a capacity/position
   management wait state, not a Codex or market-data startup blocker.

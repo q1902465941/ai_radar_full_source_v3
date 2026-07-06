@@ -103,6 +103,8 @@ Binance USD-M Futures public mainnet data, not mock or testnet:
 MARKET_DATA_MODE=binance
 BINANCE_TESTNET=false
 BINANCE_MARKET_FALLBACK_TESTNET=false
+BINANCE_ASCII_SYMBOLS_ONLY=true
+DOCKER_DB_PATH=data/ai_radar.db
 AI_ENABLED=false
 AI_STRATEGY_PROVIDER=rule
 REQUIRE_CODEX_STRATEGY_FOR_ENTRY=false
@@ -165,10 +167,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify_docker_stack.ps1
 
 The script waits for a fresh radar `last_scan_id`, verifies mainnet market
 source, compares BTC price, BTC 24h percentage change, and radar top samples
-against Binance USD-M Futures mainnet tickers, verifies that the active ticker
-pool covers Binance's highest-priority liquidity-adjusted movers, verifies
-that paper graduation progress is visible in readiness, and then runs the
-controlled paper closed-loop acceptance.
+against Binance USD-M Futures mainnet tickers, verifies that monitor symbols
+are supported USD-M ASCII contracts, verifies that the active ticker pool covers
+Binance's highest-priority liquidity-adjusted movers, verifies that paper
+graduation progress is visible in readiness, and then runs the controlled paper
+closed-loop acceptance.
 
 Verify the controlled paper closed loop after the stack is healthy:
 

@@ -173,9 +173,25 @@ function Get-DefaultRadarExcludedMajorSymbols {
     )
 }
 
+function Test-AsciiSymbol {
+    param([string]$Symbol)
+    if ([string]::IsNullOrWhiteSpace($Symbol)) {
+        return $false
+    }
+    foreach ($ch in $Symbol.ToCharArray()) {
+        if ([int][char]$ch -gt 127) {
+            return $false
+        }
+    }
+    return $true
+}
+
 function Test-BinanceCryptoPerpetualSymbol {
     param([object]$Meta)
     if ($null -eq $Meta) {
+        return $false
+    }
+    if (-not (Test-AsciiSymbol -Symbol ([string]$Meta.symbol))) {
         return $false
     }
     if ([string]$Meta.status -ne "TRADING") {
@@ -244,6 +260,37 @@ function Get-BinanceRankedTickerCandidates {
     return @($rows | Sort-Object -Property @{ Expression = { -[double]$_.score } }, @{ Expression = { -[double]$_.quoteVolume } }, @{ Expression = { [string]$_.symbol } })
 }
 
+function Assert-MonitorSymbolsUseSupportedUsdMAsciiContracts {
+    if ($SkipExternalBinanceCheck) {
+        return
+    }
+    $radar = Read-Json "$MonitorBaseUrl/api/radar"
+    $readiness = Read-Json "$MonitorBaseUrl/api/system/readiness"
+    $exchangeInfo = Read-Json "https://fapi.binance.com/fapi/v1/exchangeInfo"
+    $metaBySymbol = @{}
+    foreach ($row in @($exchangeInfo.symbols)) {
+        $symbol = [string]$row.symbol
+        if (-not [string]::IsNullOrWhiteSpace($symbol)) {
+            $metaBySymbol[$symbol] = $row
+        }
+    }
+    $symbols = @()
+    foreach ($item in @($radar.top50)) {
+        $symbols += [string]$item.symbol
+    }
+    foreach ($symbol in @($readiness.market_data.active_coins.active_symbols | ForEach-Object { [string]$_ })) {
+        $symbols += $symbol
+    }
+    $symbols = @($symbols | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    Assert-True ($symbols.Count -gt 0) "no monitor market symbols available to validate"
+    foreach ($symbol in $symbols) {
+        Assert-True (Test-AsciiSymbol -Symbol $symbol) "monitor symbol '$symbol' is not ASCII"
+        Assert-True ($symbol.EndsWith("USDT")) "monitor symbol '$symbol' is not a USDT contract"
+        Assert-True (Test-BinanceCryptoPerpetualSymbol -Meta $metaBySymbol[$symbol]) "monitor symbol '$symbol' is not a supported Binance USD-M perpetual contract"
+    }
+    Write-Host "market symbols use supported USD-M ASCII contracts: checked=$($symbols.Count)"
+}
+
 function Assert-ActiveTickerCandidateCoverage {
     if ($SkipExternalBinanceCheck) {
         return
@@ -288,6 +335,17 @@ function Assert-PaperGraduationProgress {
     Write-Host "paper graduation progress: real_closed=$realClosed/$minimumClosed missing=$missingClosed trust=$($progress.trust_level)"
 }
 
+function Assert-DockerDatabasePath {
+    $readiness = Read-Json "$MonitorBaseUrl/api/system/readiness"
+    $db = $readiness.database
+    Assert-True ($null -ne $db) "database readiness section is missing"
+    $path = [string]$db.path
+    Assert-True (-not [string]::IsNullOrWhiteSpace($path)) "database path is empty"
+    Assert-True ($path -eq "data/ai_radar.db" -or $path -eq "/app/data/ai_radar.db") "database path '$path' is not the mounted Docker data path"
+    Assert-True ($db.exists -eq $true) "database file does not exist at '$path'"
+    Write-Host "database path uses mounted Docker volume: $path"
+}
+
 Invoke-Step "compose config" {
     docker compose config --quiet
 }
@@ -303,6 +361,10 @@ Invoke-Step "v2 api health" {
     $health = Read-Json "$V2BaseUrl/api/v2/health"
     Assert-True ($health.ok -eq $true) "v2 health did not return ok=true"
     Assert-True ($health.service -eq "ai-radar-api") "v2 health returned an unexpected service"
+}
+
+Invoke-Step "database path uses mounted Docker volume" {
+    Assert-DockerDatabasePath
 }
 
 Invoke-Step "monitor state uses mainnet market data" {
@@ -354,6 +416,10 @@ Invoke-Step "radar data present" {
     Assert-True ($radar.scan_status.market_refresh.degraded -eq $false) "radar market_refresh.degraded is true: $($radar.scan_status.market_refresh.error)"
     Assert-True ([string]::IsNullOrWhiteSpace($radar.scan_status.market_refresh.error)) "radar market refresh error is not empty: $($radar.scan_status.market_refresh.error)"
     Assert-RadarPricesAgainstBinance -Radar $radar
+}
+
+Invoke-Step "market symbols use supported USD-M ASCII contracts" {
+    Assert-MonitorSymbolsUseSupportedUsdMAsciiContracts
 }
 
 Invoke-Step "active ticker candidate coverage" {

@@ -36,6 +36,7 @@ class BinanceTickerStream:
                 "priceChangePercent": row.get("P"),
             }
             for row in self._tickers.values()
+            if _is_usdm_ticker_row(row)
         ]
 
     def diagnostics(self) -> dict[str, Any]:
@@ -89,6 +90,16 @@ def _host_of(url: str) -> str:
         return urlparse(url).netloc
     except Exception:
         return ""
+
+
+def _is_usdm_ticker_row(row: dict[str, Any]) -> bool:
+    symbol_type = row.get("st")
+    if symbol_type is None:
+        return True
+    try:
+        return int(symbol_type) == 1
+    except Exception:
+        return False
 
 
 binance_ticker_stream = BinanceTickerStream()

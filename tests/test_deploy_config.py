@@ -35,10 +35,13 @@ def test_docker_compose_passes_mainnet_market_runtime_env_to_backend_services():
     assert "BINANCE_TESTNET: ${BINANCE_TESTNET:-false}" in compose
     assert "BINANCE_MARKET_FALLBACK_TESTNET: ${BINANCE_MARKET_FALLBACK_TESTNET:-false}" in compose
     assert "BINANCE_WS_ENABLED: ${BINANCE_WS_ENABLED:-true}" in compose
+    assert "BINANCE_ASCII_SYMBOLS_ONLY: ${BINANCE_ASCII_SYMBOLS_ONLY:-true}" in compose
     assert "BINANCE_API_KEY: ${BINANCE_API_KEY:-}" in compose
     assert "BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}" in compose
     assert "AI_STRATEGY_PROVIDER: ${AI_STRATEGY_PROVIDER:-rule}" in compose
     assert "REQUIRE_CODEX_STRATEGY_FOR_ENTRY: ${REQUIRE_CODEX_STRATEGY_FOR_ENTRY:-false}" in compose
+    assert "DB_PATH: ${DOCKER_DB_PATH:-data/ai_radar.db}" in compose
+    assert "DB_PATH: ${DB_PATH:-data/ai_radar.db}" not in compose
 
 
 def test_docker_compose_runs_legacy_monitor_as_single_background_worker():
@@ -62,8 +65,10 @@ def test_env_example_defaults_to_mainnet_public_market_data():
     assert "MARKET_DATA_MODE=binance" in env_example
     assert "BINANCE_TESTNET=false" in env_example
     assert "BINANCE_MARKET_FALLBACK_TESTNET=false" in env_example
+    assert "BINANCE_ASCII_SYMBOLS_ONLY=true" in env_example
     assert "AI_STRATEGY_PROVIDER=rule" in env_example
     assert "REQUIRE_CODEX_STRATEGY_FOR_ENTRY=false" in env_example
+    assert "DOCKER_DB_PATH=data/ai_radar.db" in env_example
     assert "MARKET_DATA_MODE=mock" not in env_example
     assert "BINANCE_TESTNET=true" not in env_example
 
@@ -88,7 +93,10 @@ def test_docker_stack_verification_script_checks_monitor_and_mainnet_market_data
     assert "active ticker candidate coverage" in script
     assert "Get-BinanceRankedTickerCandidates" in script
     assert "https://fapi.binance.com/fapi/v1/exchangeInfo" in script
+    assert "market symbols use supported USD-M ASCII contracts" in script
+    assert "Test-AsciiSymbol" in script
     assert "EscapeDataString" in script
+    assert "database path uses mounted Docker volume" in script
 
 
 def test_dockerignore_preserves_data_artifacts_for_backend_image():

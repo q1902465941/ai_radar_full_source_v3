@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     binance_symbol_limit: int = 80
     binance_mover_share: float = 0.30
     binance_crypto_perpetual_only: bool = True
+    binance_ascii_symbols_only: bool = True
     binance_min_symbol_age_days: float = 7.0
     binance_kline_max_bar_move_pct: float = 35.0
     binance_factor_concurrency: int = 4

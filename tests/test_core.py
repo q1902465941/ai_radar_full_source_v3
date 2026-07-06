@@ -2288,6 +2288,22 @@ def test_binance_ticker_ws_url_uses_market_routed_futures_path(monkeypatch):
     assert ticker_stream._url() == "wss://fstream.binance.com/market/ws/!ticker@arr"
 
 
+def test_binance_ticker_ws_filters_coin_m_rows_after_cm_migration():
+    from backend.market.binance_ws_ticker import BinanceTickerStream
+
+    ticker_stream = BinanceTickerStream()
+    ticker_stream._updated_at = __import__("time").monotonic()
+    ticker_stream._tickers = {
+        "BTCUSDT": {"s": "BTCUSDT", "c": "60000", "q": "1000000", "P": "1.2", "st": 1},
+        "BTCUSD_PERP": {"s": "BTCUSD_PERP", "c": "60000", "q": "1000000", "P": "1.2", "st": 2},
+        "ETHUSDT": {"s": "ETHUSDT", "c": "3000", "q": "800000", "P": "0.8"},
+    }
+
+    rows = ticker_stream.snapshot_rows()
+
+    assert [row["symbol"] for row in rows] == ["BTCUSDT", "ETHUSDT"]
+
+
 def test_binance_ws_custom_url_override_is_preserved(monkeypatch):
     from backend.market.binance_ws_ticker import BinanceTickerStream
 
@@ -2382,6 +2398,54 @@ def test_binance_factor_source_ranks_active_ticker_candidates_before_capacity(mo
 
     assert active == ["HIGH1USDT", "HIGH2USDT"]
     assert dynamic_symbol_stream.diagnostics()["active_symbols"] == ["HIGH1USDT", "HIGH2USDT"]
+
+
+def test_binance_factor_source_excludes_localized_contract_symbols(monkeypatch):
+    monkeypatch.setattr(settings, "radar_exclude_major_symbols_from_anomaly", False)
+    monkeypatch.setattr(settings, "binance_symbol_limit", 3)
+    source = BinanceFactorSource(client=FakeBinanceMarketClient())
+    source._exchange_symbol_meta = {
+        "BTCUSDT": _exchange_symbol_meta("BTCUSDT"),
+        "龙虾USDT": _exchange_symbol_meta("龙虾USDT"),
+    }
+    premiums = {
+        "BTCUSDT": {"markPrice": "100"},
+        "龙虾USDT": {"markPrice": "0.01"},
+    }
+    tickers = {
+        "BTCUSDT": {"lastPrice": "100", "quoteVolume": "1000000", "priceChangePercent": "0.5"},
+        "龙虾USDT": {"lastPrice": "0.01", "quoteVolume": "9000000", "priceChangePercent": "25"},
+    }
+
+    selected = source._select_symbols(premiums, tickers)
+    active = source._discover_active_candidates(premiums, tickers)
+
+    assert selected == ["BTCUSDT"]
+    assert active == []
+    assert active_coin_registry.active_symbols() == []
+
+
+def test_binance_factor_source_drops_existing_unsupported_active_symbols(monkeypatch):
+    monkeypatch.setattr(settings, "radar_exclude_major_symbols_from_anomaly", False)
+    source = BinanceFactorSource(client=FakeBinanceMarketClient())
+    source._exchange_symbol_meta = {
+        "BTCUSDT": _exchange_symbol_meta("BTCUSDT"),
+        "龙虾USDT": _exchange_symbol_meta("龙虾USDT"),
+    }
+    active_coin_registry.update_candidates(["龙虾USDT", "BTCUSDT"], now=100.0)
+    dynamic_symbol_stream.sync(["龙虾USDT", "BTCUSDT"], now=100.0)
+
+    filtered = source._prioritize_active_symbols(
+        ["BTCUSDT"],
+        ["龙虾USDT", "BTCUSDT"],
+        valid_symbols={"BTCUSDT", "龙虾USDT"},
+    )
+    source._drop_unsupported_active_symbols(now=101.0)
+    dynamic_symbol_stream.sync(active_coin_registry.active_symbols(), now=101.0)
+
+    assert filtered == ["BTCUSDT"]
+    assert active_coin_registry.active_symbols() == ["BTCUSDT"]
+    assert dynamic_symbol_stream.diagnostics()["active_symbols"] == ["BTCUSDT"]
 
 
 def test_binance_factor_source_does_not_cut_active_pool_to_base_symbol_limit(monkeypatch):
@@ -8952,6 +9016,54 @@ def test_position_manager_holds_noise_inside_live_thesis(monkeypatch):
         assert not [row for row in position_registry.list_closed() if row["symbol"] == symbol]
     finally:
         cleanup_symbol(symbol)
+
+
+def test_position_manager_uses_strategy_contract_time_stop(monkeypatch):
+    position_registry.open.clear()
+    symbol = "CONTRACTTIMEUSDT"
+    cleanup_symbol(symbol)
+    monkeypatch.setattr(settings, "position_max_hold_seconds", 21600)
+    try:
+        p = Position(
+            position_id="pos_contract_time_stop",
+            strategy_id="strat_contract_time_stop",
+            source_signal_id="scan_contract_time_stop",
+            symbol=symbol,
+            side="LONG",
+            status="OPEN",
+            stage="Stage 1",
+            score=72,
+            entry_price=100,
+            current_price=100,
+            quantity=1,
+            initial_quantity=1,
+            margin=100,
+            leverage=1,
+            stop_loss=90,
+            tp1=105,
+            tp2=110,
+            best_price=100,
+            risk_usdt=10,
+            open_time=now_ms() - 181_000,
+            strategy_contract={
+                "time_stop": {
+                    "seconds": 180,
+                    "rule": "Exit if the paper probe does not develop before the time stop.",
+                }
+            },
+        )
+        position_registry.add(p)
+        radar_engine.top50 = [high_quality_item(symbol=symbol, side="LONG", price=99)]
+        patch_position_quote(monkeypatch, 99)
+
+        __import__("asyncio").run(position_manager.manage_all())
+
+        assert not position_registry.has_symbol(symbol)
+        closed = [row for row in position_registry.list_closed() if row["position_id"] == "pos_contract_time_stop"]
+        assert closed[0]["close_reason"] == "MAX_HOLD_TIMEOUT"
+    finally:
+        cleanup_symbol(symbol)
+
 
 def test_position_manager_blocks_snapshot_cache_for_position_valuation(monkeypatch):
     position_registry.open.clear()

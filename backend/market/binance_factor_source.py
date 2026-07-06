@@ -78,10 +78,15 @@ class BinanceFactorSource:
                 return self._cached_or_empty("exchange_info_unavailable")
             active_symbols = self._discover_active_candidates(premiums, tickers)
             symbols = self._select_symbols(premiums, tickers)
+            valid_symbols = {
+                symbol
+                for symbol in (set(premiums) & set(tickers))
+                if self._symbol_allowed(symbol)
+            }
             symbols = self._prioritize_active_symbols(
                 symbols,
                 active_symbols,
-                valid_symbols=set(premiums) & set(tickers),
+                valid_symbols=valid_symbols,
             )
             self.current_symbol_count = len(symbols)
             if not symbols:
@@ -282,10 +287,16 @@ class BinanceFactorSource:
         candidate_rows.sort(key=lambda item: (-item[1], -item[2], item[0]))
         candidates = [symbol for symbol, _, _ in candidate_rows]
         active_coin_registry.update_candidates(candidates, now=now, reason_by_symbol=reason_by_symbol, score_by_symbol=score_by_symbol)
+        self._drop_unsupported_active_symbols(now=now)
         active_coin_registry.expire_idle(now=now)
         active_symbols = active_coin_registry.active_symbols()
         dynamic_symbol_stream.sync(active_symbols, now=now)
         return active_symbols
+
+    def _drop_unsupported_active_symbols(self, *, now: float | None = None) -> None:
+        for symbol in list(active_coin_registry.active_symbols()):
+            if not self._symbol_allowed(symbol):
+                active_coin_registry.remove(symbol, now=now, reason="unsupported_symbol")
 
     def _prioritize_active_symbols(
         self,
@@ -302,6 +313,8 @@ class BinanceFactorSource:
         out = []
         for symbol in [*active_symbols, *symbols]:
             if current_valid and symbol not in current_valid:
+                continue
+            if not self._symbol_allowed(symbol):
                 continue
             if symbol not in out:
                 out.append(symbol)
@@ -383,6 +396,8 @@ class BinanceFactorSource:
 
     def _symbol_allowed(self, symbol: str) -> bool:
         symbol = str(symbol or "").upper()
+        if bool(settings.binance_ascii_symbols_only) and not symbol.isascii():
+            return False
         if not symbol.endswith("USDT"):
             return False
         if not settings.binance_crypto_perpetual_only:
