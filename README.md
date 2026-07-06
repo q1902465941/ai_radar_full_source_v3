@@ -161,7 +161,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify_docker_stack.ps1
 
 The Docker verifier waits for a fresh radar scan, checks mainnet market source,
 compares BTC price, BTC 24h percentage change, and radar top samples against
-Binance USD-M Futures mainnet tickers, and runs the controlled paper
+Binance USD-M Futures mainnet tickers, verifies that the active ticker pool
+covers Binance's highest-priority liquidity-adjusted movers, checks that paper
+graduation progress is visible in readiness, and runs the controlled paper
 closed-loop acceptance.
 
 Controlled paper closed-loop acceptance:

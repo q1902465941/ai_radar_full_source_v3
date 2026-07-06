@@ -249,7 +249,7 @@ class BinanceFactorSource:
         min_24h = max(0.0, float(settings.radar_active_min_change_24h or 0.0))
         min_short = max(0.0, float(settings.radar_active_min_short_change_pct or 0.0))
         excluded_major_symbols = self._radar_excluded_major_symbols()
-        candidates: list[str] = []
+        candidate_rows: list[tuple[str, float, float]] = []
         reason_by_symbol: dict[str, str] = {}
         score_by_symbol: dict[str, float] = {}
         for symbol, ticker in tickers.items():
@@ -274,9 +274,13 @@ class BinanceFactorSource:
                 reasons.append("ticker_short_move")
             if not reasons:
                 continue
-            candidates.append(symbol)
+            move_score = max(abs(change_24h), abs(short_change))
+            priority_score = _liquidity_adjusted_move_score(quote_volume, move_score)
+            candidate_rows.append((symbol, priority_score, quote_volume))
             reason_by_symbol[symbol] = "+".join(reasons)
-            score_by_symbol[symbol] = max(abs(change_24h), abs(short_change))
+            score_by_symbol[symbol] = priority_score
+        candidate_rows.sort(key=lambda item: (-item[1], -item[2], item[0]))
+        candidates = [symbol for symbol, _, _ in candidate_rows]
         active_coin_registry.update_candidates(candidates, now=now, reason_by_symbol=reason_by_symbol, score_by_symbol=score_by_symbol)
         active_coin_registry.expire_idle(now=now)
         active_symbols = active_coin_registry.active_symbols()
@@ -738,6 +742,12 @@ def _pct(current: float, previous: float) -> float:
     if previous <= 0:
         return 0.0
     return (current - previous) / previous * 100
+
+
+def _liquidity_adjusted_move_score(quote_volume: float, move_pct: float) -> float:
+    if quote_volume <= 0 or move_pct <= 0:
+        return 0.0
+    return float(move_pct) * max(1.0, math.log10(max(float(quote_volume), 10.0)))
 
 
 def _float(value: Any) -> float:

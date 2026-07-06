@@ -740,6 +740,18 @@ function blockerLine(blocker) {
   `;
 }
 
+function graduationSummary(progress) {
+  const p = progress || {};
+  const real = finiteNumber(p.real_closed_samples_with_radar);
+  const minimum = finiteNumber(p.minimum_real_closed_samples);
+  const missing = finiteNumber(p.missing_real_closed_samples);
+  const trust = p.trust_level || '--';
+  if (real !== null && minimum !== null) {
+    return `real ${fmt(real, 0)}/${fmt(minimum, 0)} / missing ${fmt(missing || 0, 0)} / ${trust}`;
+  }
+  return `${p.production_grade ? 'PRODUCTION' : 'PENDING'} / ${trust}`;
+}
+
 function renderSystemReadiness(data) {
   const summary = document.getElementById('systemReadinessSummary');
   const blockersEl = document.getElementById('systemReadinessBlockers');
@@ -748,6 +760,7 @@ function renderSystemReadiness(data) {
   const market = data.market_data || {};
   const wait = data.wait || {};
   const paper = data.paper_learning || {};
+  const graduation = paper.graduation_progress || {};
   const live = data.live_enablement || {};
   const codex = data.codex || {};
   const ws = data.websocket || {};
@@ -760,6 +773,7 @@ function renderSystemReadiness(data) {
     ['Radar Scan', `${market.scan && market.scan.in_progress ? 'RUNNING' : 'IDLE'} / top50 ${market.scan ? market.scan.top50_count ?? '--' : '--'}`],
     ['WAIT', `${wait.status || '--'} / candidates ${(wait.candidate_symbols || []).length}`],
     ['Paper Loop', `${yesNo(paper.auto_loop_enabled)} / ${paper.candidate_mode || '--'}`],
+    ['Graduation', graduationSummary(graduation)],
     ['Live Stage', `${live.current_stage || '--'} / live ${yesNo(live.switches && live.switches.live_trading_enabled)}`],
     ['Codex', `${codex.command_found ? 'OK' : 'MISS'} / ${codex.last_status || '--'}`],
     ['WS', `ticker ${ticker.running ? 'ON' : 'OFF'} / dyn ${dynamic.active_count ?? 0}`],

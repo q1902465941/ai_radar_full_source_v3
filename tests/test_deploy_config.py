@@ -78,11 +78,17 @@ def test_docker_stack_verification_script_checks_monitor_and_mainnet_market_data
     assert "market_data_source" in script
     assert "mainnet" in script
     assert "market_refresh.degraded" in script
-    assert "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT" in script
+    assert "https://fapi.binance.com/fapi/v1/ticker/price?symbol=$encodedSymbol" in script
     assert "api/trade-director/acceptance/paper-cycle" in script
     assert "learning_open_recorded" in script
     assert "learning_close_recorded" in script
     assert "real_order_allowed" in script
+    assert "graduation_progress" in script
+    assert "missing_real_closed_samples" in script
+    assert "active ticker candidate coverage" in script
+    assert "Get-BinanceRankedTickerCandidates" in script
+    assert "https://fapi.binance.com/fapi/v1/exchangeInfo" in script
+    assert "EscapeDataString" in script
 
 
 def test_dockerignore_preserves_data_artifacts_for_backend_image():

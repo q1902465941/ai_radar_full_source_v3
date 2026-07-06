@@ -69,7 +69,8 @@ class ActiveCoinRegistry:
             reason = reason_by_symbol.get(symbol, "")
             if coin is None:
                 if len(self._active) >= max(1, self.max_symbols):
-                    continue
+                    if not self._replace_lowest_priority_if_better(score, now=current):
+                        continue
                 coin = ActiveCoin(
                     symbol=symbol,
                     first_seen=current,
@@ -88,6 +89,29 @@ class ActiveCoinRegistry:
                 coin.peak_score = max(float(coin.peak_score or 0.0), score)
             updated.append(coin)
         return updated
+
+    def _replace_lowest_priority_if_better(self, score: float, *, now: float) -> bool:
+        if not self._active:
+            return True
+        lowest_symbol = min(
+            self._active,
+            key=lambda symbol: (
+                float(self._active[symbol].current_score or 0.0),
+                float(self._active[symbol].last_seen or 0.0),
+                symbol,
+            ),
+        )
+        lowest = self._active[lowest_symbol]
+        if float(score or 0.0) <= float(lowest.current_score or 0.0):
+            return False
+        removed = self._active.pop(lowest_symbol)
+        removed.status = "INVALID"
+        removed.reason = "capacity_replace"
+        removed.removed_at = now
+        removed.cooldown_until = 0.0
+        self._recent_removed.insert(0, removed.asdict(now))
+        self._recent_removed = self._recent_removed[:20]
+        return True
 
     def expire_idle(self, *, now: float | None = None) -> list[ActiveCoin]:
         current = _now(now)
@@ -121,7 +145,14 @@ class ActiveCoinRegistry:
         coin.last_seen = _now(now)
 
     def active_symbols(self) -> list[str]:
-        return sorted(self._active.keys(), key=lambda symbol: (-self._active[symbol].last_seen, symbol))
+        return sorted(
+            self._active.keys(),
+            key=lambda symbol: (
+                -float(self._active[symbol].current_score or 0.0),
+                -float(self._active[symbol].last_seen or 0.0),
+                symbol,
+            ),
+        )
 
     def diagnostics(self, *, now: float | None = None) -> dict[str, Any]:
         current = _now(now)
@@ -142,6 +173,8 @@ class ActiveCoinRegistry:
                 "idle_seconds": self.idle_seconds,
                 "cooldown_seconds": self.cooldown_seconds,
                 "max_symbols": self.max_symbols,
+                "ordering": "current_score_desc",
+                "capacity": "replace_lowest_score",
             },
         }
 

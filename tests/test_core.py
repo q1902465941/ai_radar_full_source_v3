@@ -2231,6 +2231,26 @@ def test_active_coin_registry_refreshes_expires_and_cools_down():
     assert diag["recent_removed"][0]["reason"] == "idle_timeout"
 
 
+def test_active_coin_registry_replaces_lowest_priority_when_full():
+    registry = ActiveCoinRegistry(idle_seconds=180, cooldown_seconds=120, max_symbols=2)
+
+    registry.update_candidates(
+        ["LOW1USDT", "LOW2USDT"],
+        now=100.0,
+        score_by_symbol={"LOW1USDT": 1.0, "LOW2USDT": 2.0},
+    )
+    registry.update_candidates(
+        ["HIGHUSDT"],
+        now=101.0,
+        score_by_symbol={"HIGHUSDT": 9.0},
+    )
+
+    assert registry.active_symbols() == ["HIGHUSDT", "LOW2USDT"]
+    diag = registry.diagnostics(now=101.0)
+    assert diag["recent_removed"][0]["symbol"] == "LOW1USDT"
+    assert diag["recent_removed"][0]["reason"] == "capacity_replace"
+
+
 def test_dynamic_symbol_stream_syncs_subscriptions_without_static_symbol_list():
     stream = DynamicSymbolStream(streams=("aggTrade", "depth20@100ms", "kline_1m"))
 
@@ -2336,6 +2356,32 @@ def test_binance_factor_source_prioritizes_active_ticker_anomalies(monkeypatch):
     assert [snap.symbol for snap in snaps] == ["HOTUSDT"]
     assert active_coin_registry.active_symbols() == ["HOTUSDT"]
     assert dynamic_symbol_stream.diagnostics()["active_symbols"] == ["HOTUSDT"]
+
+
+def test_binance_factor_source_ranks_active_ticker_candidates_before_capacity(monkeypatch):
+    monkeypatch.setattr(active_coin_registry, "max_symbols", 2)
+    monkeypatch.setattr(settings, "radar_active_coin_max_symbols", 2)
+    monkeypatch.setattr(settings, "radar_active_min_quote_volume", 500000.0)
+    monkeypatch.setattr(settings, "radar_active_min_change_24h", 2.5)
+    monkeypatch.setattr(settings, "radar_active_min_short_change_pct", 999.0)
+    monkeypatch.setattr(settings, "radar_exclude_major_symbols_from_anomaly", False)
+    source = BinanceFactorSource(client=FakeBinanceMarketClient())
+    source._exchange_symbol_meta = {
+        symbol: _exchange_symbol_meta(symbol)
+        for symbol in ["LOW1USDT", "LOW2USDT", "HIGH1USDT", "HIGH2USDT"]
+    }
+    premiums = {symbol: {"markPrice": "1"} for symbol in source._exchange_symbol_meta}
+    tickers = {
+        "LOW1USDT": {"lastPrice": "1", "quoteVolume": "600000", "priceChangePercent": "3"},
+        "LOW2USDT": {"lastPrice": "1", "quoteVolume": "700000", "priceChangePercent": "4"},
+        "HIGH1USDT": {"lastPrice": "1", "quoteVolume": "100000000", "priceChangePercent": "20"},
+        "HIGH2USDT": {"lastPrice": "1", "quoteVolume": "50000000", "priceChangePercent": "15"},
+    }
+
+    active = source._discover_active_candidates(premiums, tickers)
+
+    assert active == ["HIGH1USDT", "HIGH2USDT"]
+    assert dynamic_symbol_stream.diagnostics()["active_symbols"] == ["HIGH1USDT", "HIGH2USDT"]
 
 
 def test_binance_factor_source_does_not_cut_active_pool_to_base_symbol_limit(monkeypatch):
@@ -5105,6 +5151,53 @@ def test_system_readiness_report_marks_codex_wait_and_paper_closed_loop(monkeypa
     assert report["paper_learning"]["closed_loop_enabled"] is True
     assert any(blocker["code"] == "codex_command_missing" for blocker in report["wait"]["blockers"])
     assert any(blocker["code"] == "codex_command_missing" for blocker in report["blockers"])
+
+
+def test_system_readiness_exposes_paper_graduation_progress(monkeypatch):
+    import backend.system_readiness as system_readiness
+
+    monkeypatch.setattr(
+        system_readiness.learning_data_audit,
+        "summary",
+        lambda: {
+            "production_grade": False,
+            "trust_level": "LOW",
+            "can_hard_block_from_learning": False,
+            "reasons": ["real_closed_samples_low", "market_backtest_missing"],
+            "minimums": {"real_closed_samples": 30, "radar_history_days": 14.0},
+            "sources": {
+                "combined_samples": 404,
+                "replay_samples": 403,
+                "real_closed_samples_with_radar": 1,
+                "replay_ratio": 0.9975,
+            },
+            "radar_snapshots": {"span_days": 0.2},
+            "market_backtest": {"available": False, "quality_passed": False},
+        },
+    )
+    monkeypatch.setattr(
+        system_readiness.performance_guard,
+        "summary",
+        lambda: {"trades": 1, "win_rate": 1.0, "recent_win_rate": 1.0, "pnl": 0.5, "loss_streak": 0, "recovery_mode": False},
+    )
+    monkeypatch.setattr(
+        system_readiness.trade_attributor,
+        "summary",
+        lambda: {"sample_count": 404, "global_win_rate": 0.4, "global_profit_factor": 0.8, "global_pnl": -1.0},
+    )
+
+    report = system_readiness.system_readiness_report()
+    progress = report["paper_learning"]["graduation_progress"]
+
+    assert progress["real_closed_samples_with_radar"] == 1
+    assert progress["minimum_real_closed_samples"] == 30
+    assert progress["missing_real_closed_samples"] == 29
+    assert progress["market_backtest_available"] is False
+    assert progress["market_backtest_quality_passed"] is False
+    assert progress["radar_history_days"] == 0.2
+    assert progress["minimum_radar_history_days"] == 14.0
+    assert progress["production_grade"] is False
+    assert progress["next_requirement"] == "Collect 29 more real closed paper/shadow samples with radar context or provide a passing market backtest."
 
 
 def test_system_readiness_database_probe_counts_tables(tmp_path):

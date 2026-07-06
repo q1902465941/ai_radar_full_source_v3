@@ -280,6 +280,7 @@ def paper_learning_status(
         blockers.append(_block("performance_recovery_mode", "WARN", "paper_learning", "Performance guard is in recovery mode.", "Paper can still sample, but live graduation stays blocked."))
     if not bool(data_quality.get("production_grade")):
         blockers.append(_block("learning_data_not_production_grade", "WARN", "paper_learning", "Learning data is not production-grade yet.", "Use it as feedback, not as live approval."))
+    graduation_progress = paper_graduation_progress(data_quality)
     return {
         "closed_loop_enabled": closed_loop_enabled,
         "auto_loop_enabled": bool(autotrader.enabled),
@@ -318,6 +319,7 @@ def paper_learning_status(
             "can_hard_block_from_learning": bool(data_quality.get("can_hard_block_from_learning")),
             "reasons": list(data_quality.get("reasons") or [])[:8],
         },
+        "graduation_progress": graduation_progress,
         "strategy_feedback": {
             "tracked_strategies": feedback.get("tracked_strategies"),
             "closed_samples": feedback.get("closed_samples"),
@@ -325,6 +327,48 @@ def paper_learning_status(
             "win_rate": feedback.get("win_rate"),
         },
         "blockers": _dedupe_blockers(blockers),
+    }
+
+
+def paper_graduation_progress(data_quality: dict[str, Any]) -> dict[str, Any]:
+    minimums = data_quality.get("minimums") if isinstance(data_quality.get("minimums"), dict) else {}
+    sources = data_quality.get("sources") if isinstance(data_quality.get("sources"), dict) else {}
+    market_backtest = data_quality.get("market_backtest") if isinstance(data_quality.get("market_backtest"), dict) else {}
+    radar = data_quality.get("radar_snapshots") if isinstance(data_quality.get("radar_snapshots"), dict) else {}
+    real_closed = _safe_int(sources.get("real_closed_samples_with_radar"))
+    min_real_closed = max(1, _safe_int(minimums.get("real_closed_samples"), 30))
+    missing_real_closed = max(0, min_real_closed - real_closed)
+    market_available = bool(market_backtest.get("available"))
+    market_passed = bool(market_backtest.get("quality_passed"))
+    radar_days = _safe_float(radar.get("span_days"))
+    min_radar_days = _safe_float(minimums.get("radar_history_days"), 14.0)
+    production_grade = bool(data_quality.get("production_grade"))
+    if production_grade:
+        next_requirement = "Production-grade learning evidence is available."
+    elif market_available and not market_passed:
+        next_requirement = "Repair or regenerate the market backtest until quality gates pass."
+    elif missing_real_closed > 0:
+        next_requirement = (
+            f"Collect {missing_real_closed} more real closed paper/shadow samples with radar context "
+            "or provide a passing market backtest."
+        )
+    else:
+        next_requirement = "Provide a passing market backtest or extend radar history until the production gate clears."
+    return {
+        "production_grade": production_grade,
+        "trust_level": data_quality.get("trust_level"),
+        "real_closed_samples_with_radar": real_closed,
+        "minimum_real_closed_samples": min_real_closed,
+        "missing_real_closed_samples": missing_real_closed,
+        "combined_samples": _safe_int(sources.get("combined_samples")),
+        "replay_samples": _safe_int(sources.get("replay_samples")),
+        "replay_ratio": _safe_float(sources.get("replay_ratio")),
+        "market_backtest_available": market_available,
+        "market_backtest_quality_passed": market_passed,
+        "radar_history_days": radar_days,
+        "minimum_radar_history_days": min_radar_days,
+        "reasons": list(data_quality.get("reasons") or [])[:8],
+        "next_requirement": next_requirement,
     }
 
 
@@ -591,5 +635,12 @@ def _scan_error_message(scan_error: str) -> str:
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(float(value))
+    except Exception:
+        return default
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
     except Exception:
         return default
