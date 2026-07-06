@@ -346,15 +346,22 @@ function Assert-PaperGraduationProgress {
     $progress = $readiness.paper_learning.graduation_progress
     Assert-True ($null -ne $progress) "paper learning graduation_progress is missing from readiness"
     Assert-True ($null -ne $progress.PSObject.Properties["real_closed_samples_with_radar"]) "graduation_progress.real_closed_samples_with_radar is missing"
+    Assert-True ($null -ne $progress.PSObject.Properties["codex_real_closed_samples_with_radar"]) "graduation_progress.codex_real_closed_samples_with_radar is missing"
+    Assert-True ($null -ne $progress.PSObject.Properties["codex_missing_real_closed_samples"]) "graduation_progress.codex_missing_real_closed_samples is missing"
+    Assert-True ($null -ne $progress.PSObject.Properties["real_closed_samples_by_provider"]) "graduation_progress.real_closed_samples_by_provider is missing"
     Assert-True ($null -ne $progress.PSObject.Properties["minimum_real_closed_samples"]) "graduation_progress.minimum_real_closed_samples is missing"
     Assert-True ($null -ne $progress.PSObject.Properties["missing_real_closed_samples"]) "graduation_progress.missing_real_closed_samples is missing"
     $realClosed = [int]$progress.real_closed_samples_with_radar
+    $codexClosed = [int]$progress.codex_real_closed_samples_with_radar
+    $codexMissing = [int]$progress.codex_missing_real_closed_samples
     $minimumClosed = [int]$progress.minimum_real_closed_samples
     $missingClosed = [int]$progress.missing_real_closed_samples
     Assert-True ($minimumClosed -gt 0) "minimum_real_closed_samples is not positive"
     Assert-True ($missingClosed -ge 0) "missing_real_closed_samples is negative"
+    Assert-True ($codexClosed -ge 0) "codex_real_closed_samples_with_radar is negative"
+    Assert-True ($codexMissing -ge 0) "codex_missing_real_closed_samples is negative"
     Assert-True (($realClosed + $missingClosed) -ge $minimumClosed) "graduation sample math is inconsistent"
-    Write-Host "paper graduation progress: real_closed=$realClosed/$minimumClosed missing=$missingClosed trust=$($progress.trust_level)"
+    Write-Host "paper graduation progress: real_closed=$realClosed/$minimumClosed missing=$missingClosed codex_closed=$codexClosed codex_missing=$codexMissing trust=$($progress.trust_level)"
 }
 
 function Assert-CodexEntryEnforcementVisible {

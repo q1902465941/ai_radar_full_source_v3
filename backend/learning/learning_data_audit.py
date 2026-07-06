@@ -4,11 +4,13 @@ import time
 import json
 import importlib.util
 import shutil
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from backend.config import settings
 from backend.learning.replay_memory import replay_memory
+from backend.learning.strategy_registry import strategy_registry
 from backend.learning.trade_memory import is_learning_close_reason, trade_memory
 from backend.storage.db import db
 
@@ -39,6 +41,8 @@ class LearningDataAudit:
         closed_samples = trade_memory.samples(limit=sample_limit, require_radar=True)
         raw_closed_rows = db.list_closed(limit=100000)
         closed_total = sum(1 for row in raw_closed_rows if is_learning_close_reason(row.get("close_reason")))
+        excluded_close_reason_counts = self._excluded_close_reason_counts(raw_closed_rows)
+        closed_sample_providers = self._closed_sample_provider_counts(closed_samples)
         radar = self._radar_summary()
         reset_at_ms = self._learning_reset_at_ms()
         market_backtest = self._apply_learning_reset_to_market_backtest(self._market_backtest_summary(), reset_at_ms)
@@ -96,9 +100,13 @@ class LearningDataAudit:
                 "combined_samples": combined_count,
                 "replay_samples": replay_count,
                 "real_closed_samples_with_radar": closed_count,
+                "codex_real_closed_samples_with_radar": int(closed_sample_providers.get("codex_cli") or 0),
+                "real_closed_samples_by_provider": closed_sample_providers,
                 "closed_trades_total": closed_total,
                 "raw_closed_trades_total": len(raw_closed_rows),
                 "excluded_closed_trades": len(raw_closed_rows) - closed_total,
+                "closed_without_radar_samples": max(0, closed_total - closed_count),
+                "excluded_close_reason_counts": excluded_close_reason_counts,
                 "replay_ratio": round(replay_ratio, 4),
             },
             "metrics": {
@@ -116,6 +124,45 @@ class LearningDataAudit:
         self._cache = report
         self._cache_until = now + max(1, int(settings.event_calibration_ttl_seconds))
         return report
+
+    def _closed_sample_provider_counts(self, closed_samples: list[dict[str, Any]]) -> dict[str, int]:
+        strategies = self._strategy_index()
+        counts: Counter[str] = Counter()
+        for sample in closed_samples:
+            counts[self._sample_provider(sample, strategies)] += 1
+        return dict(sorted(counts.items()))
+
+    def _sample_provider(self, sample: dict[str, Any], strategies: dict[str, dict[str, Any]]) -> str:
+        strategy_id = str(sample.get("strategy_id") or "")
+        strategy = strategies.get(strategy_id) or {}
+        provider = str(sample.get("provider") or strategy.get("provider") or "").strip().lower()
+        if not provider:
+            source = str(strategy.get("source") or "").strip().lower()
+            if source.startswith("ai_generated_"):
+                provider = source[len("ai_generated_") :]
+        if not provider:
+            contract = sample.get("strategy_contract") if isinstance(sample.get("strategy_contract"), dict) else {}
+            provider = str(contract.get("provider") or contract.get("model_provider") or "").strip().lower()
+        return provider or "unknown"
+
+    def _strategy_index(self) -> dict[str, dict[str, Any]]:
+        try:
+            strategies = strategy_registry.list(limit=10000)
+        except Exception:
+            return {}
+        return {
+            str(strategy.get("strategy_id") or ""): strategy
+            for strategy in strategies
+            if isinstance(strategy, dict) and str(strategy.get("strategy_id") or "")
+        }
+
+    def _excluded_close_reason_counts(self, rows: list[dict[str, Any]]) -> dict[str, int]:
+        counts: Counter[str] = Counter()
+        for row in rows:
+            reason = str(row.get("close_reason") or "unknown")
+            if not is_learning_close_reason(reason):
+                counts[reason] += 1
+        return dict(sorted(counts.items()))
 
     def compact(self) -> dict[str, Any]:
         report = self.summary()

@@ -155,6 +155,10 @@ def test_docker_stack_verification_script_checks_monitor_and_mainnet_market_data
     assert "real_order_allowed" in script
     assert "graduation_progress" in script
     assert "missing_real_closed_samples" in script
+    assert "codex_real_closed_samples_with_radar" in script
+    assert "real_closed_samples_by_provider" in script
+    assert "codex_real_closed_samples_with_radar" in monitor_js
+    assert "real_closed_samples_by_provider" in monitor_js
     assert "active ticker candidate coverage" in script
     assert "Get-BinanceRankedTickerCandidates" in script
     assert "https://fapi.binance.com/fapi/v1/exchangeInfo" in script

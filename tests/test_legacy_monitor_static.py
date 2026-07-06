@@ -10,6 +10,9 @@ def test_legacy_monitor_renders_graduation_progress_card():
     assert "graduation_progress" in script
     assert "Graduation" in script
     assert "missing_real_closed_samples" in script
+    assert "codex_real_closed_samples_with_radar" in script
+    assert "codex_missing_real_closed_samples" in script
+    assert "real_closed_samples_by_provider" in script
 
 
 def test_legacy_monitor_renders_codex_generation_readiness():

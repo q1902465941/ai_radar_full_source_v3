@@ -3941,6 +3941,50 @@ def test_learning_data_audit_counts_only_learning_closed_trades(monkeypatch):
     assert report["sources"]["raw_closed_trades_total"] == 2
     assert report["sources"]["excluded_closed_trades"] == 1
 
+
+def test_learning_data_audit_exposes_closed_sample_provider_breakdown(monkeypatch):
+    learning_data_audit.clear_cache()
+    codex_sample = {**sample_trade(), "strategy_id": "codex_strategy"}
+    rule_sample = {**sample_trade(close_time=2), "strategy_id": "rule_strategy"}
+    unknown_sample = {**sample_trade(close_time=3), "strategy_id": "missing_strategy"}
+    monkeypatch.setattr(settings, "replay_enabled", False)
+    monkeypatch.setattr(trade_memory, "samples", lambda limit=10000, require_radar=True: [codex_sample, rule_sample, unknown_sample])
+    monkeypatch.setattr(
+        db,
+        "list_closed",
+        lambda limit=100000: [
+            {"close_reason": "TP2"},
+            {"close_reason": "SL"},
+            {"close_reason": "MAX_HOLD_TIMEOUT"},
+            {"close_reason": "ACCEPTANCE_TP2"},
+        ],
+    )
+    monkeypatch.setattr(
+        strategy_registry,
+        "list",
+        lambda limit=10000: [
+            {"strategy_id": "codex_strategy", "provider": "codex_cli", "source": "ai_generated_codex_cli"},
+            {"strategy_id": "rule_strategy", "provider": "rule", "source": "ai_generated_rule"},
+        ],
+    )
+    monkeypatch.setattr(learning_data_audit, "_radar_summary", lambda: {"span_days": 0, "rows": 0, "distinct_scans": 0, "distinct_symbols": 0})
+    monkeypatch.setattr(
+        learning_data_audit,
+        "_market_backtest_summary",
+        lambda: {
+            "available": False,
+            "quality_passed": False,
+            "missing_reasons": ["market_backtest_report_missing"],
+        },
+    )
+
+    report = learning_data_audit.summary(force=True)
+
+    assert report["sources"]["real_closed_samples_by_provider"] == {"codex_cli": 1, "rule": 1, "unknown": 1}
+    assert report["sources"]["codex_real_closed_samples_with_radar"] == 1
+    assert report["sources"]["excluded_close_reason_counts"] == {"ACCEPTANCE_TP2": 1}
+
+
 def test_learning_data_audit_rejects_market_backtest_before_learning_reset(monkeypatch):
     learning_data_audit.clear_cache()
     monkeypatch.setattr(settings, "replay_enabled", True)
@@ -5824,6 +5868,8 @@ def test_system_readiness_exposes_paper_graduation_progress(monkeypatch):
                 "combined_samples": 404,
                 "replay_samples": 403,
                 "real_closed_samples_with_radar": 1,
+                "codex_real_closed_samples_with_radar": 0,
+                "real_closed_samples_by_provider": {"rule": 1},
                 "replay_ratio": 0.9975,
             },
             "radar_snapshots": {"span_days": 0.2},
@@ -5845,6 +5891,9 @@ def test_system_readiness_exposes_paper_graduation_progress(monkeypatch):
     progress = report["paper_learning"]["graduation_progress"]
 
     assert progress["real_closed_samples_with_radar"] == 1
+    assert progress["codex_real_closed_samples_with_radar"] == 0
+    assert progress["codex_missing_real_closed_samples"] == 30
+    assert progress["real_closed_samples_by_provider"] == {"rule": 1}
     assert progress["minimum_real_closed_samples"] == 30
     assert progress["missing_real_closed_samples"] == 29
     assert progress["market_backtest_available"] is False

@@ -350,8 +350,11 @@ def paper_graduation_progress(data_quality: dict[str, Any]) -> dict[str, Any]:
     market_backtest = data_quality.get("market_backtest") if isinstance(data_quality.get("market_backtest"), dict) else {}
     radar = data_quality.get("radar_snapshots") if isinstance(data_quality.get("radar_snapshots"), dict) else {}
     real_closed = _safe_int(sources.get("real_closed_samples_with_radar"))
+    codex_real_closed = _safe_int(sources.get("codex_real_closed_samples_with_radar"))
+    provider_counts = sources.get("real_closed_samples_by_provider") if isinstance(sources.get("real_closed_samples_by_provider"), dict) else {}
     min_real_closed = max(1, _safe_int(minimums.get("real_closed_samples"), 30))
     missing_real_closed = max(0, min_real_closed - real_closed)
+    codex_missing_real_closed = max(0, min_real_closed - codex_real_closed)
     market_available = bool(market_backtest.get("available"))
     market_passed = bool(market_backtest.get("quality_passed"))
     radar_days = _safe_float(radar.get("span_days"))
@@ -372,11 +375,16 @@ def paper_graduation_progress(data_quality: dict[str, Any]) -> dict[str, Any]:
         "production_grade": production_grade,
         "trust_level": data_quality.get("trust_level"),
         "real_closed_samples_with_radar": real_closed,
+        "codex_real_closed_samples_with_radar": codex_real_closed,
+        "codex_missing_real_closed_samples": codex_missing_real_closed,
+        "real_closed_samples_by_provider": dict(sorted((str(k), _safe_int(v)) for k, v in provider_counts.items())),
         "minimum_real_closed_samples": min_real_closed,
         "missing_real_closed_samples": missing_real_closed,
         "combined_samples": _safe_int(sources.get("combined_samples")),
         "replay_samples": _safe_int(sources.get("replay_samples")),
         "replay_ratio": _safe_float(sources.get("replay_ratio")),
+        "closed_without_radar_samples": _safe_int(sources.get("closed_without_radar_samples")),
+        "excluded_close_reason_counts": sources.get("excluded_close_reason_counts") if isinstance(sources.get("excluded_close_reason_counts"), dict) else {},
         "market_backtest_available": market_available,
         "market_backtest_quality_passed": market_passed,
         "radar_history_days": radar_days,

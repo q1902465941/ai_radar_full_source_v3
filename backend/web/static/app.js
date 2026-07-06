@@ -761,11 +761,20 @@ function blockerLine(blocker) {
 function graduationSummary(progress) {
   const p = progress || {};
   const real = finiteNumber(p.real_closed_samples_with_radar);
+  const codexReal = finiteNumber(p.codex_real_closed_samples_with_radar);
+  const codexMissing = finiteNumber(p.codex_missing_real_closed_samples);
   const minimum = finiteNumber(p.minimum_real_closed_samples);
   const missing = finiteNumber(p.missing_real_closed_samples);
   const trust = p.trust_level || '--';
+  const providers = p.real_closed_samples_by_provider || {};
+  const providerLine = Object.keys(providers).length
+    ? ` / providers ${Object.entries(providers).map(([k, v]) => `${k}:${v}`).join(',')}`
+    : '';
   if (real !== null && minimum !== null) {
-    return `real ${fmt(real, 0)}/${fmt(minimum, 0)} / missing ${fmt(missing || 0, 0)} / ${trust}`;
+    const codexLine = codexReal !== null
+      ? ` / codex ${fmt(codexReal, 0)}/${fmt(minimum, 0)} missing ${fmt(codexMissing || 0, 0)}`
+      : '';
+    return `real ${fmt(real, 0)}/${fmt(minimum, 0)} / missing ${fmt(missing || 0, 0)}${codexLine}${providerLine} / ${trust}`;
   }
   return `${p.production_grade ? 'PRODUCTION' : 'PENDING'} / ${trust}`;
 }
