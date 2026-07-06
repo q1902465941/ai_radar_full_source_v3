@@ -42,9 +42,14 @@ class AutoTradingRiskModel:
             and account.get("execution_context") == "paper_closed_loop"
             and not settings.live_trading_enabled
         )
+        controlled_paper_acceptance = _is_controlled_paper_acceptance(plan, account)
         if plan.action == "WAIT":
             return self._observe(item, plan, "WAIT", 60, "AI requested wait")
-        if settings.require_codex_strategy_for_entry and not _is_codex_generated(plan):
+        if (
+            settings.require_codex_strategy_for_entry
+            and not _is_codex_generated(plan)
+            and not controlled_paper_acceptance
+        ):
             provider = str((plan.raw or {}).get("provider") or "unknown")
             return self._observe(
                 item,
@@ -381,3 +386,13 @@ auto_trading_risk_model = AutoTradingRiskModel()
 def _is_codex_generated(plan: StrategyPlan) -> bool:
     provider = str((plan.raw or {}).get("provider") or "").strip()
     return provider == "codex_cli"
+
+
+def _is_controlled_paper_acceptance(plan: StrategyPlan, account: dict) -> bool:
+    raw = plan.raw if isinstance(plan.raw, dict) else {}
+    return bool(
+        str(account.get("execution_context") or "") == "paper_closed_loop"
+        and not settings.live_trading_enabled
+        and raw.get("acceptance_mode") is True
+        and str(raw.get("candidate_source") or "") == "acceptance_controlled_paper_cycle"
+    )

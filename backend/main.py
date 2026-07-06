@@ -57,6 +57,10 @@ class MainnetConfigRequest(BaseModel):
     api_secret: str
 
 
+class CodexStrategyConfigRequest(BaseModel):
+    pass
+
+
 class EvolveRequest(BaseModel):
     use_codex: bool = False
     promote: bool = False
@@ -660,6 +664,56 @@ async def api_save_mainnet_config(payload: MainnetConfigRequest):
         "configured": binance_futures.configured(),
         "api_key_tail": api_key[-6:],
     }
+
+
+def _codex_strategy_config_response(*, ok: bool = True, mode: str = "codex_strategy_status") -> dict[str, Any]:
+    readiness = system_readiness_report()
+    codex_entry = readiness.get("codex") if isinstance(readiness.get("codex"), dict) else {}
+    real_order_allowed = bool(settings.trade_mode == "live" and settings.live_trading_enabled and not settings.live_use_test_order)
+    return {
+        "ok": ok,
+        "mode": mode,
+        "values": {
+            "AI_ENABLED": "true" if settings.ai_enabled else "false",
+            "AI_STRATEGY_PROVIDER": settings.ai_strategy_provider,
+            "REQUIRE_CODEX_STRATEGY_FOR_ENTRY": "true" if settings.require_codex_strategy_for_entry else "false",
+            "LIVE_TRADING_ENABLED": "true" if settings.live_trading_enabled else "false",
+            "LIVE_USE_TEST_ORDER": "true" if settings.live_use_test_order else "false",
+        },
+        "safety": {
+            "trade_mode": settings.trade_mode,
+            "live_trading_enabled": bool(settings.live_trading_enabled),
+            "live_use_test_order": bool(settings.live_use_test_order),
+            "real_order_allowed": real_order_allowed,
+        },
+        "codex_entry": codex_entry,
+    }
+
+
+@app.get("/api/config/codex-strategy")
+async def api_codex_strategy_config():
+    return _codex_strategy_config_response()
+
+
+@app.post("/api/config/codex-strategy")
+async def api_enable_codex_strategy_config(payload: CodexStrategyConfigRequest | None = None):
+    values = {
+        "AI_ENABLED": "true",
+        "AI_STRATEGY_PROVIDER": "codex_cli",
+        "REQUIRE_CODEX_STRATEGY_FOR_ENTRY": "true",
+        "LIVE_TRADING_ENABLED": "false",
+        "LIVE_USE_TEST_ORDER": "true",
+    }
+    update_env_values(".env", values)
+
+    settings.ai_enabled = True
+    settings.ai_strategy_provider = values["AI_STRATEGY_PROVIDER"]
+    settings.require_codex_strategy_for_entry = True
+    settings.live_trading_enabled = False
+    settings.live_use_test_order = True
+
+    return _codex_strategy_config_response(mode="codex_strategy_enforced")
+
 
 @app.get("/api/exchange/positions")
 async def api_exchange_positions():

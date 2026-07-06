@@ -7150,14 +7150,6 @@ def test_ai_trade_director_manual_run_cannot_bypass_live_loop_guard(monkeypatch)
 def test_trade_acceptance_runner_verifies_real_paper_cycle(monkeypatch):
     cleanup_symbol("ACCEPTUSDT")
     cleanup_acceptance_strategies()
-
-    async def fake_generate(item, position_context=None):
-        plan = rule_strategy_generator.generate_probe(item)
-        plan.strategy_id = "codex_acceptance_test"
-        plan.raw["provider"] = "codex_cli"
-        return plan
-
-    monkeypatch.setattr("backend.trading.trade_acceptance.openai_strategy_client.generate", fake_generate)
     try:
         out = __import__("asyncio").run(trade_acceptance_runner.run_controlled_paper_cycle())
 
@@ -7174,6 +7166,32 @@ def test_trade_acceptance_runner_verifies_real_paper_cycle(monkeypatch):
         assert out["result"]["symbol"] == "ACCEPTUSDT"
         assert out["result"]["close_reason"] == "ACCEPTANCE_TP2"
         assert out["real_order_allowed"] is False
+        assert not position_registry.has_symbol("ACCEPTUSDT")
+    finally:
+        cleanup_symbol("ACCEPTUSDT")
+        cleanup_acceptance_strategies()
+
+
+def test_trade_acceptance_controlled_cycle_does_not_depend_on_codex_entry_enforcement(monkeypatch):
+    cleanup_symbol("ACCEPTUSDT")
+    cleanup_acceptance_strategies()
+    monkeypatch.setattr(settings, "ai_enabled", True)
+    monkeypatch.setattr(settings, "ai_strategy_provider", "codex_cli")
+    monkeypatch.setattr(settings, "require_codex_strategy_for_entry", True)
+
+    async def fail_generate(*args, **kwargs):
+        raise AssertionError("controlled paper acceptance must not call external AI strategy generation")
+
+    monkeypatch.setattr("backend.ai_strategy.ai_service.ai_service.generate_strategy", fail_generate)
+    try:
+        out = __import__("asyncio").run(trade_acceptance_runner.run_controlled_paper_cycle())
+
+        stages = {stage["name"]: stage for stage in out["stages"]}
+        assert out["ok"] is True
+        assert stages["strategy_plan"]["ok"] is True
+        assert stages["risk_model"]["ok"] is True
+        assert out["real_order_allowed"] is False
+        assert stages["strategy_plan"]["evidence"]["provider"] == "rule"
         assert not position_registry.has_symbol("ACCEPTUSDT")
     finally:
         cleanup_symbol("ACCEPTUSDT")
@@ -9296,6 +9314,58 @@ def test_sensitive_config_post_accepts_valid_api_token(monkeypatch):
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert writes
+
+
+def test_codex_strategy_config_endpoint_enforces_codex_without_live_orders(monkeypatch):
+    from backend.main import app
+
+    writes = []
+    monkeypatch.setattr(settings, "api_token", "test-token")
+    monkeypatch.setattr(settings, "ai_enabled", False)
+    monkeypatch.setattr(settings, "ai_strategy_provider", "rule")
+    monkeypatch.setattr(settings, "require_codex_strategy_for_entry", False)
+    monkeypatch.setattr(settings, "live_trading_enabled", True)
+    monkeypatch.setattr(settings, "live_use_test_order", False)
+    monkeypatch.setattr("backend.main.update_env_values", lambda path, values: writes.append(values))
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/config/codex-strategy",
+        headers={"X-API-Token": "test-token"},
+        json={},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["mode"] == "codex_strategy_enforced"
+    assert writes[-1]["AI_ENABLED"] == "true"
+    assert writes[-1]["AI_STRATEGY_PROVIDER"] == "codex_cli"
+    assert writes[-1]["REQUIRE_CODEX_STRATEGY_FOR_ENTRY"] == "true"
+    assert writes[-1]["LIVE_TRADING_ENABLED"] == "false"
+    assert writes[-1]["LIVE_USE_TEST_ORDER"] == "true"
+    assert settings.ai_enabled is True
+    assert settings.ai_strategy_provider == "codex_cli"
+    assert settings.require_codex_strategy_for_entry is True
+    assert settings.live_trading_enabled is False
+    assert settings.live_use_test_order is True
+    assert body["safety"]["live_trading_enabled"] is False
+    assert body["codex_entry"]["entry_enforced"] is True
+
+
+def test_codex_strategy_config_endpoint_accepts_empty_body(monkeypatch):
+    from backend.main import app
+
+    writes = []
+    monkeypatch.setattr(settings, "api_token", "test-token")
+    monkeypatch.setattr("backend.main.update_env_values", lambda path, values: writes.append(values))
+    client = TestClient(app)
+
+    response = client.post("/api/config/codex-strategy", headers={"X-API-Token": "test-token"})
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "codex_strategy_enforced"
+    assert writes[-1]["AI_STRATEGY_PROVIDER"] == "codex_cli"
 
 
 def test_strategy_alpha_api_exposes_status_and_run_cycle(monkeypatch):

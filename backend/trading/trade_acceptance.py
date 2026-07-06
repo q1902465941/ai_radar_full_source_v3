@@ -3,9 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from backend.ai_strategy.ai_service import ai_service
 from backend.ai_strategy.dynamic_trade_model import auto_trading_risk_model
-from backend.ai_strategy.openai_strategy_client import openai_strategy_client
+from backend.ai_strategy.rule_strategy import rule_strategy_generator
 from backend.config import settings
 from backend.learning.ai_strategy_feedback import ai_strategy_feedback
 from backend.learning.strategy_registry import strategy_registry
@@ -28,20 +27,15 @@ class TradeAcceptanceRunner:
         before_closed_ids = {row.get("position_id") for row in position_registry.list_closed(limit=200)}
         item = self._acceptance_candidate()
         cyqnt = candidate_feature_enhancer.evaluate(item).asdict()
-        plan = await ai_service.generate_strategy(
-            item,
-            {
-                "open_positions": 0,
-                "performance_guard": {"recovery_mode": False},
-                "candidate_selection": {
-                    "source": "acceptance_controlled_paper_cycle",
-                    "paper_validation": True,
-                    "paper_probe": True,
-                    "acceptance_mode": True,
-                },
-            },
-        )
-        plan.raw = {**plan.raw, "acceptance_mode": True, "cyqnt_feature_enhancement": cyqnt}
+        plan = rule_strategy_generator.generate_probe(item)
+        plan.raw = {
+            **plan.raw,
+            "provider": "rule",
+            "model": "controlled_paper_rule",
+            "acceptance_mode": True,
+            "candidate_source": "acceptance_controlled_paper_cycle",
+            "cyqnt_feature_enhancement": cyqnt,
+        }
         exec_plan = auto_trading_risk_model.decide(
             item,
             plan,
