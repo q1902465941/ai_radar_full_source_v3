@@ -143,9 +143,9 @@ hardening mainnet market data:
   longer includes `AI Radar Control Center`.
 - Docker landing verification: `scripts/verify_docker_stack.ps1` completed.
 - Latest Docker verification checked 8 radar prices with worst drift
-  `DEEPUSDT 0.323%`, checked 81 monitor/active symbols as supported USD-M
+  `MIRAUSDT 0.124%`, checked 90 monitor/active symbols as supported USD-M
   ASCII contracts, matched `10/10` active ticker priority candidates, reported
-  paper graduation `real_closed=1/30 missing=29`, and completed the controlled
+  paper graduation `real_closed=3/30 missing=27`, and completed the controlled
   paper closed loop.
 - Latest browser smoke showed the 24h major-market cards, `Graduation`, the AI
   candidate queue, and the scan evidence matrix with no browser console errors.
@@ -259,7 +259,7 @@ Evidence from 2026-07-06:
 - Paper loop guard: `ok=true`, reason `paper_closed_loop_sampling`.
 - Codex-related wait/paper-entry blockers: none.
 - Paper graduation progress is visible in readiness. Current mounted Docker DB
-  evidence after the latest rebuild showed `real_closed=1/30`, `missing=29`,
+  evidence after the latest rebuild showed `real_closed=3/30`, `missing=27`,
   and trust `LOW`, so the paper/shadow loop is usable while live graduation
   remains blocked.
 - Paper-top sampling now cools down rejected candidates, releases the candidate
