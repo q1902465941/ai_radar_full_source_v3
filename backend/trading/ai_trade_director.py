@@ -399,12 +399,19 @@ class AITradeDirector:
 
     def _codex_open_positions(self) -> list[dict[str, Any]]:
         out = []
+        current_ms = now_ms()
         for position in position_registry.list_open():
             strategy = strategy_registry.get(position.strategy_id) or {}
             provider = str(strategy.get("provider") or "")
             source = str(strategy.get("source") or "")
             if provider != "codex_cli" and source != "ai_generated_codex_cli":
                 continue
+            contract = position.strategy_contract if isinstance(position.strategy_contract, dict) else {}
+            time_stop = contract.get("time_stop") if isinstance(contract.get("time_stop"), dict) else {}
+            opened_ms = int(position.open_time or 0)
+            hold_seconds = round(max(0, current_ms - opened_ms) / 1000, 3) if opened_ms else 0.0
+            time_stop_seconds = int(float(time_stop.get("seconds") or 0)) if time_stop else 0
+            time_stop_remaining = max(0.0, round(float(time_stop_seconds) - hold_seconds, 3)) if time_stop_seconds else 0.0
             out.append(
                 {
                     "position_id": position.position_id,
@@ -415,10 +422,32 @@ class AITradeDirector:
                     "provider": "codex_cli",
                     "source": source or "ai_generated_codex_cli",
                     "open_time": position.open_time,
+                    "hold_seconds": hold_seconds,
                     "entry_price": position.entry_price,
                     "current_price": position.current_price,
                     "unrealized_pnl": position.unrealized_pnl,
+                    "roi": position.roi,
                     "lifecycle_state": position.lifecycle_state,
+                    "thesis_alive": bool(position.thesis_alive),
+                    "defense_level": position.defense_level,
+                    "exit_targets": {
+                        "stop_loss": position.stop_loss,
+                        "tp1": position.tp1,
+                        "tp2": position.tp2,
+                    },
+                    "time_stop": {
+                        "seconds": time_stop_seconds,
+                        "remaining_seconds": time_stop_remaining,
+                        "rule": str(time_stop.get("rule") or "") if time_stop else "",
+                    },
+                    "risk_state": {
+                        "adverse_r": position.adverse_r,
+                        "favorable_r": position.favorable_r,
+                        "mfe_r": position.mfe_r,
+                        "mae_r": position.mae_r,
+                        "noise_budget_r": position.noise_budget_r,
+                    },
+                    "last_decision": position.last_decision or {},
                 }
             )
         return out

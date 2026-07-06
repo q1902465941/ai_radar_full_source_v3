@@ -7310,6 +7310,8 @@ def test_ai_trade_director_codex_paper_probe_reports_pending_codex_position_when
     item = high_quality_item(symbol="CODEXPENDINGUSDT", side="SHORT", price=100)
     pending = feedback_position("codex_pending_strategy", item.symbol, "pos_codex_pending")
     pending.side = "SHORT"
+    pending.last_decision = {"action": "HOLD", "reason": "THESIS_ALIVE", "thesis_alive": True}
+    pending.strategy_contract = {"time_stop": {"seconds": 3600}}
     position_registry.open[pending.position_id] = pending
     monkeypatch.setattr(settings, "ai_enabled", True)
     monkeypatch.setattr(settings, "ai_strategy_provider", "codex_cli")
@@ -7374,6 +7376,9 @@ def test_ai_trade_director_codex_paper_probe_reports_pending_codex_position_when
     assert out["blocked_reason"] == "capacity_full_existing_codex_paper_position"
     assert out["open_positions"][0]["position_id"] == pending.position_id
     assert out["open_positions"][0]["provider"] == "codex_cli"
+    assert out["open_positions"][0]["exit_targets"] == {"stop_loss": 99, "tp1": 101.2, "tp2": 102.5}
+    assert out["open_positions"][0]["time_stop"]["seconds"] == 3600
+    assert out["open_positions"][0]["last_decision"]["reason"] == "THESIS_ALIVE"
     assert out["next_action"] == "wait_for_position_manager_close_to_create_codex_closed_sample"
 
 
