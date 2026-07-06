@@ -357,6 +357,24 @@ function Assert-PaperGraduationProgress {
     Write-Host "paper graduation progress: real_closed=$realClosed/$minimumClosed missing=$missingClosed trust=$($progress.trust_level)"
 }
 
+function Assert-CodexEntryEnforcementVisible {
+    $readiness = Read-Json "$MonitorBaseUrl/api/system/readiness"
+    $codex = $readiness.codex
+    Assert-True ($null -ne $codex) "codex readiness section is missing"
+    Assert-True ($null -ne $codex.PSObject.Properties["entry_enforced"]) "codex.entry_enforced is missing"
+    Assert-True ($null -ne $codex.PSObject.Properties["entry_enforcement_reason"]) "codex.entry_enforcement_reason is missing"
+    if ($codex.entry_enforced -eq $true) {
+        Assert-True ($codex.provider -eq "codex_cli") "Codex entry enforcement claims true but provider is $($codex.provider)"
+        Assert-True ($codex.required_for_entry -eq $true) "Codex entry enforcement claims true but required_for_entry is false"
+        Write-Host "Codex entry enforcement: enforced provider=$($codex.provider) ready=$($codex.ready_for_generation)"
+        return
+    }
+    $blockers = @($readiness.blockers)
+    $blocker = $blockers | Where-Object { $_.code -eq "codex_strategy_not_enforced_for_live_intent" } | Select-Object -First 1
+    Assert-True ($null -ne $blocker) "Codex entry enforcement is false but codex_strategy_not_enforced_for_live_intent blocker is missing"
+    Write-Host "Codex entry enforcement: not enforced reason=$($codex.entry_enforcement_reason)"
+}
+
 function Assert-DockerDatabasePath {
     $readiness = Read-Json "$MonitorBaseUrl/api/system/readiness"
     $db = $readiness.database
@@ -450,6 +468,10 @@ Invoke-Step "active ticker candidate coverage" {
 
 Invoke-Step "paper graduation progress visible" {
     Assert-PaperGraduationProgress
+}
+
+Invoke-Step "Codex entry enforcement visible" {
+    Assert-CodexEntryEnforcementVisible
 }
 
 if (-not $SkipPaperAcceptance) {

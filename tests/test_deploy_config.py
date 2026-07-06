@@ -143,6 +143,10 @@ def test_docker_stack_verification_script_checks_monitor_and_mainnet_market_data
     assert "market_refresh.degraded" in script
     assert "warning=${market.warning}" in monitor_js
     assert "market.warning ? 'WARN ' : ''" in monitor_js
+    assert "entry_enforced" in monitor_js
+    assert "entry_enforcement_reason" in monitor_js
+    assert "codex_strategy_not_enforced_for_live_intent" in script
+    assert "Codex entry enforcement" in script
     assert "https://fapi.binance.com/fapi/v1/ticker/price?symbol=$encodedSymbol" in script
     assert "api/trade-director/acceptance/paper-cycle" in script
     assert "learning_open_recorded" in script

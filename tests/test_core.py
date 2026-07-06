@@ -5771,6 +5771,43 @@ def test_system_readiness_codex_status_does_not_reuse_rule_invocation_flag(monke
     assert status["not_invoked_reason"] == "provider_rule_not_codex"
 
 
+def test_system_readiness_blocks_live_intent_without_codex_entry_enforcement(monkeypatch):
+    import backend.system_readiness as system_readiness
+
+    monkeypatch.setattr(settings, "trade_mode", "live")
+    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    monkeypatch.setattr(settings, "ai_enabled", False)
+    monkeypatch.setattr(settings, "ai_strategy_provider", "rule")
+    monkeypatch.setattr(settings, "require_codex_strategy_for_entry", False)
+
+    ai_status = {
+        "enabled": False,
+        "provider": "rule",
+        "will_invoke_for_current_candidates": True,
+        "not_invoked_reason": "",
+        "codex_cli": {
+            "command_found": True,
+            "ready_for_generation": True,
+            "availability_reason": "ok",
+        },
+    }
+    codex = system_readiness.codex_status(ai_status)
+
+    blockers = system_readiness.wait_blockers_for(
+        market={"effective_snapshot_count": 1},
+        candidate_filter={"counts": {}, "ai_wait_cooldowns": {}},
+        candidate_symbols=["BTCUSDT"],
+        loop_ok=True,
+        loop_reason="",
+        ai_status=ai_status,
+        codex=codex,
+    )
+
+    assert codex["entry_enforced"] is False
+    assert codex["entry_enforcement_reason"] == "ai_disabled"
+    assert any(blocker["code"] == "codex_strategy_not_enforced_for_live_intent" for blocker in blockers)
+
+
 def test_system_readiness_exposes_paper_graduation_progress(monkeypatch):
     import backend.system_readiness as system_readiness
 

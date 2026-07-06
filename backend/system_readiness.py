@@ -226,6 +226,17 @@ def wait_blockers_for(
                 "This is normal only when there is no candidate or capacity is full.",
             )
         )
+    if _live_intent_requires_codex_enforcement() and not bool(codex.get("entry_enforced")):
+        reason = str(codex.get("entry_enforcement_reason") or "codex_entry_not_enforced")
+        blockers.append(
+            _block(
+                "codex_strategy_not_enforced_for_live_intent",
+                "BLOCK_PAPER_ENTRY",
+                "codex",
+                f"Live-intent strategy entry is not forced through Codex: {reason}.",
+                "Set AI_ENABLED=true, AI_STRATEGY_PROVIDER=codex_cli, and REQUIRE_CODEX_STRATEGY_FOR_ENTRY=true before treating strategy generation as production-ready.",
+            )
+        )
     if _codex_required() and not _codex_generation_ready(codex):
         reason = _codex_unavailable_reason(codex)
         blockers.append(
@@ -424,6 +435,7 @@ def codex_status(ai_status: dict[str, Any]) -> dict[str, Any]:
     codex = ai_status.get("codex_cli") if isinstance(ai_status.get("codex_cli"), dict) else {}
     provider = str(ai_status.get("provider") or "").strip().lower()
     ready_for_generation = _codex_generation_ready(codex)
+    entry_enforced, entry_enforcement_reason = _codex_entry_enforcement(ai_status)
     codex_will_invoke = bool(
         provider == "codex_cli"
         and ai_status.get("will_invoke_for_current_candidates")
@@ -437,6 +449,8 @@ def codex_status(ai_status: dict[str, Any]) -> dict[str, Any]:
         not_invoked_reason = ai_status.get("not_invoked_reason")
     return {
         "required_for_entry": _codex_required(),
+        "entry_enforced": entry_enforced,
+        "entry_enforcement_reason": entry_enforcement_reason,
         "ai_enabled": bool(ai_status.get("enabled")),
         "provider": ai_status.get("provider"),
         "command_found": bool(codex.get("command_found")),
@@ -648,6 +662,21 @@ def _overall_status(blockers: list[dict[str, Any]]) -> str:
 
 def _codex_required() -> bool:
     return bool(settings.require_codex_strategy_for_entry or settings.ai_strategy_provider == "codex_cli")
+
+
+def _live_intent_requires_codex_enforcement() -> bool:
+    return str(settings.trade_mode or "").strip().lower() == "live" or bool(settings.live_trading_enabled)
+
+
+def _codex_entry_enforcement(ai_status: dict[str, Any]) -> tuple[bool, str]:
+    provider = str(ai_status.get("provider") or settings.ai_strategy_provider or "").strip().lower()
+    if not bool(ai_status.get("enabled")):
+        return False, "ai_disabled"
+    if provider != "codex_cli":
+        return False, f"provider_{provider or 'unknown'}_not_codex"
+    if not bool(settings.require_codex_strategy_for_entry):
+        return False, "require_codex_strategy_for_entry_false"
+    return True, "ok"
 
 
 def _live_action(code: str) -> str:
