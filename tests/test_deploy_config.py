@@ -144,6 +144,26 @@ def test_docker_stack_verification_script_checks_monitor_and_mainnet_market_data
     assert "database path uses mounted Docker volume" in script
 
 
+def test_codex_strategy_generation_verification_script_runs_real_docker_codex_path():
+    script = (ROOT / "scripts" / "verify_codex_strategy_generation.ps1").read_text(encoding="utf-8")
+    module = (ROOT / "backend" / "ai_strategy" / "codex_generation_acceptance.py").read_text(encoding="utf-8")
+
+    assert "docker compose run" in script
+    assert "--no-deps" in script
+    assert "-e AI_ENABLED=true" in script
+    assert "-e AI_STRATEGY_PROVIDER=codex_cli" in script
+    assert "-e REQUIRE_CODEX_STRATEGY_FOR_ENTRY=true" in script
+    assert "python -m backend.ai_strategy.codex_generation_acceptance" in script
+
+    assert "openai_strategy_client.generate" in module
+    assert "strategy_validator.validate" in module
+    assert "contract_quality" in module
+    assert "codex_real_strategy_generated" in module
+    assert '"OPEN_LONG"' in module
+    assert "codex_cli_unavailable" in module
+    assert "strategy_contract_quality" in module
+
+
 def test_dockerignore_preserves_data_artifacts_for_backend_image():
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
 

@@ -9,9 +9,22 @@ from backend.radar.candidate_feature_enhancer import candidate_feature_enhancer
 
 class ContextCompressor:
     def build_strategy_context(self, item: RadarItem, position_context: dict | None = None) -> dict:
-        cyqnt_report = candidate_feature_enhancer.evaluate(item).asdict()
         position_context = position_context or {}
         candidate_selection = position_context.get("candidate_selection") if isinstance(position_context.get("candidate_selection"), dict) else {}
+        acceptance_override = bool(
+            candidate_selection.get("acceptance_mode")
+            and candidate_selection.get("source") == "production_acceptance"
+        )
+        cyqnt_report = candidate_feature_enhancer.evaluate(item).asdict()
+        if acceptance_override:
+            cyqnt_report = _override_dict(position_context, "cyqnt_feature_enhancement", cyqnt_report)
+        strategy_feedback = ai_strategy_feedback.compact_context(item)
+        event_context = event_calibrator.compact_context(item)
+        attribution_context = trade_attributor.compact_context(item)
+        if acceptance_override:
+            strategy_feedback = _override_dict(position_context, "ai_strategy_quality_feedback", strategy_feedback)
+            event_context = _override_dict(position_context, "event_calibration", event_context)
+            attribution_context = _override_dict(position_context, "trade_attribution", attribution_context)
         pre_ai_refresh = candidate_selection.get("pre_ai_market_refresh") if isinstance(candidate_selection.get("pre_ai_market_refresh"), dict) else {}
         geometry_sample = position_context.get("strategy_geometry_sample") if isinstance(position_context.get("strategy_geometry_sample"), dict) else {}
         score_features = item.score_features if isinstance(item.score_features, dict) else {}
@@ -130,8 +143,8 @@ class ContextCompressor:
                     "NEUTRAL or opposite direction lowers confidence and should usually return WAIT unless stronger local evidence overrides it",
                 ],
             },
-            "event_calibration": event_calibrator.compact_context(item),
-            "trade_attribution": trade_attributor.compact_context(item),
+            "event_calibration": event_context,
+            "trade_attribution": attribution_context,
             "strategy_geometry_sample": {
                 **geometry_sample,
                 "role": (
@@ -139,7 +152,7 @@ class ContextCompressor:
                     "OPEN plans should use selected_geometry when status is ok, and should not claim live-quality edge when weak"
                 ),
             },
-            "ai_strategy_quality_feedback": ai_strategy_feedback.compact_context(item),
+            "ai_strategy_quality_feedback": strategy_feedback,
             "position_context": position_context,
             "context_budget": {
                 "policy": "Use compact trading lessons instead of raw history. Do not request larger context.",
@@ -157,5 +170,9 @@ class ContextCompressor:
                 "wait_requires": "wait_type, expire_after_seconds, upgrade_condition",
             }
         }
+
+def _override_dict(position_context: dict, key: str, default: dict) -> dict:
+    override = position_context.get(key) if isinstance(position_context.get(key), dict) else {}
+    return override if override else default
 
 context_compressor = ContextCompressor()

@@ -446,6 +446,53 @@ def test_codex_cli_client_generates_plan(monkeypatch):
     assert status["last_status"] == "ok"
     assert status["last_symbol"] == "XUSDT"
 
+def test_codex_generation_acceptance_fixture_is_open_long_contract_candidate():
+    from backend.ai_strategy.codex_generation_acceptance import (
+        build_acceptance_context,
+        build_acceptance_item,
+    )
+
+    item = build_acceptance_item()
+    context = build_acceptance_context(item)
+    geometry = context["strategy_geometry_sample"]["selected_geometry"]
+    generation_gate = context["ai_strategy_quality_feedback"]["candidate_feedback"]["generation_gate"]
+
+    assert item.symbol == "BTCUSDT"
+    assert item.direction == "LONG"
+    assert item.score >= 95
+    assert item.fund_confirm_count == item.fund_confirm_total >= 5
+    assert item.fake_breakout_risk == "LOW"
+    assert item.market_structure["action"] == "OPEN_LONG"
+    assert geometry["side"] == "LONG"
+    assert geometry["stop_loss"] < geometry["entry"] < geometry["tp1"] < geometry["tp2"]
+    assert context["candidate_selection"]["source"] == "production_acceptance"
+    assert context["candidate_selection"]["acceptance_mode"] is True
+    assert generation_gate["allow_open_plan"] is True
+    assert context["required_acceptance"]["expected_action"] == "OPEN_LONG"
+
+def test_codex_generation_acceptance_context_overrides_learning_generation_gate():
+    from backend.ai_strategy.codex_generation_acceptance import (
+        build_acceptance_context,
+        build_acceptance_item,
+    )
+
+    item = build_acceptance_item()
+    context = build_acceptance_context(item)
+    compressed = context_compressor.build_strategy_context(item, context)
+    generation_gate = compressed["ai_strategy_quality_feedback"]["candidate_feedback"]["generation_gate"]
+    cyqnt = compressed["cyqnt_feature_enhancement"]
+    attribution = compressed["trade_attribution"]["current_signal_attribution"]
+    event = compressed["event_calibration"]["similar_current_event"]
+
+    assert compressed["position_context"]["candidate_selection"]["source"] == "production_acceptance"
+    assert generation_gate["allow_open_plan"] is True
+    assert generation_gate["review_required"] is False
+    assert cyqnt["estimated_win_rate"] >= 0.60
+    assert cyqnt["failure_risks"] == []
+    assert attribution["paper_ok"] is True
+    assert attribution["profit_factor"] >= 1.5
+    assert event["win_rate"] >= 0.60
+
 def test_codex_cli_uses_fast_model_for_strict_review(monkeypatch):
     monkeypatch.setattr(settings, "codex_model", "gpt-5.5")
     monkeypatch.setattr(settings, "codex_reasoning_effort", "medium")
