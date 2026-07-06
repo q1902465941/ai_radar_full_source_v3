@@ -752,6 +752,15 @@ function graduationSummary(progress) {
   return `${p.production_grade ? 'PRODUCTION' : 'PENDING'} / ${trust}`;
 }
 
+function codexGenerationSummary(codex) {
+  const c = codex || {};
+  const state = c.ready_for_generation ? 'READY' : 'BLOCKED';
+  const reason = c.ready_for_generation
+    ? (c.last_status || 'idle')
+    : (c.availability_reason || c.last_error || (c.command_found ? 'not_ready' : 'codex_command_missing'));
+  return `${state} / ${reason}`;
+}
+
 function renderSystemReadiness(data) {
   const summary = document.getElementById('systemReadinessSummary');
   const blockersEl = document.getElementById('systemReadinessBlockers');
@@ -775,7 +784,7 @@ function renderSystemReadiness(data) {
     ['Paper Loop', `${yesNo(paper.auto_loop_enabled)} / ${paper.candidate_mode || '--'}`],
     ['Graduation', graduationSummary(graduation)],
     ['Live Stage', `${live.current_stage || '--'} / live ${yesNo(live.switches && live.switches.live_trading_enabled)}`],
-    ['Codex', `${codex.command_found ? 'OK' : 'MISS'} / ${codex.last_status || '--'}`],
+    ['Codex', codexGenerationSummary(codex)],
     ['WS', `ticker ${ticker.running ? 'ON' : 'OFF'} / dyn ${dynamic.active_count ?? 0}`],
     ['DB', `${database.ok ? 'OK' : 'BAD'} / radar ${(database.tables || {}).radar_snapshots ?? '--'}`],
   ];
@@ -895,7 +904,7 @@ async function refreshAutoTradeDiagnostics() {
     const aiCards = [
       ['AI', ai.will_invoke_for_current_candidates ? 'INVOKE' : 'IDLE'],
       ['AI reason', ai.not_invoked_reason || '--'],
-      ['Codex', `${codex.command_found ? 'OK' : 'MISS'} ${codex.model || ''}`],
+      ['Codex', codexGenerationSummary(codex)],
     ];
     summary.innerHTML = [
       ...aiCards,

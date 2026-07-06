@@ -20,10 +20,13 @@ class OpenAIStrategyClient:
             return _rule_strategy_plan(item, position_context)
         if not settings.ai_enabled:
             return _ai_strategy_wait(item, "ai_disabled")
+        if provider == "codex_cli":
+            codex = codex_cli_strategy_client.status()
+            if not _codex_ready(codex):
+                return _ai_strategy_wait(item, str(codex.get("availability_reason") or "codex_unavailable"))
+            return await codex_cli_strategy_client.generate(item, position_context)
         if provider == "deepseek":
             return await deepseek_strategy_client.generate(item, position_context)
-        if provider == "codex_cli":
-            return await codex_cli_strategy_client.generate(item, position_context)
         if not settings.openai_api_key:
             return _ai_strategy_wait(item, "openai_unimplemented_or_key_missing")
         # This keeps project dependency small. Install openai SDK and implement call here for production.
@@ -31,6 +34,8 @@ class OpenAIStrategyClient:
 
     def status(self, *, candidate_count: int = 0, candidate_source: str = "") -> dict:
         provider = _provider()
+        codex = codex_cli_strategy_client.status()
+        codex_ready = _codex_ready(codex)
         position_priority = _position_manager_priority()
         capacity_full = _capacity_full()
         if position_priority:
@@ -45,34 +50,42 @@ class OpenAIStrategyClient:
             not_invoked_reason = ""
         elif not settings.ai_enabled:
             not_invoked_reason = "ai_disabled"
+        elif provider == "codex_cli" and not codex_ready:
+            not_invoked_reason = str(codex.get("availability_reason") or "codex_unavailable")
         elif provider not in {"codex_cli", "deepseek"}:
             not_invoked_reason = f"provider_{provider}_uses_local_or_unimplemented_fallback"
         else:
             not_invoked_reason = ""
+        will_invoke = bool(
+            (provider == "rule" or settings.ai_enabled)
+            and (
+                provider == "rule"
+                or (provider == "codex_cli" and codex_ready)
+                or (provider == "deepseek" and not settings.require_codex_strategy_for_entry)
+            )
+            and candidate_count > 0
+            and not (settings.require_codex_strategy_for_entry and provider != "codex_cli")
+            and not position_priority
+            and not capacity_full
+        )
         return {
             "enabled": bool(settings.ai_enabled),
             "provider": provider,
             "candidate_source": candidate_source,
             "candidate_count_before_ai": candidate_count,
-            "will_invoke_for_current_candidates": bool(
-                (provider == "rule" or settings.ai_enabled)
-                and (
-                    provider == "rule"
-                    or provider == "codex_cli"
-                    or (provider == "deepseek" and not settings.require_codex_strategy_for_entry)
-                )
-                and candidate_count > 0
-                and not (settings.require_codex_strategy_for_entry and provider != "codex_cli")
-                and not position_priority
-                and not capacity_full
-            ),
+            "will_invoke_for_current_candidates": will_invoke,
             "not_invoked_reason": not_invoked_reason,
-            "codex_cli": codex_cli_strategy_client.status(),
+            "codex_cli": codex,
             "deepseek": deepseek_strategy_client.status(),
         }
 
 def _provider() -> str:
     return str(settings.ai_strategy_provider or "rule").strip().lower()
+
+def _codex_ready(codex: dict) -> bool:
+    if "ready_for_generation" in codex:
+        return bool(codex.get("ready_for_generation"))
+    return bool(codex.get("command_found") and codex.get("schema_exists", True))
 
 def _acceptance_mode(position_context: dict | None = None) -> bool:
     selection = (position_context or {}).get("candidate_selection") or {}

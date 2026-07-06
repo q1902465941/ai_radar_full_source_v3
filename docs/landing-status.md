@@ -31,7 +31,7 @@ and `scripts/stop_local_stack.ps1`.
 
 Evidence from the latest local run:
 
-- Backend tests: `381 passed`
+- Backend tests: `385 passed`
 - Frontend tests: `5 files / 8 tests passed`
 - Frontend production build: passed
 - Backend smoke: `/api/v2/health` returned service `ai-radar-api`
@@ -143,7 +143,7 @@ hardening mainnet market data:
   longer includes `AI Radar Control Center`.
 - Docker landing verification: `scripts/verify_docker_stack.ps1` completed.
 - Latest Docker verification checked 8 radar prices with worst drift
-  `MOVRUSDT 0.138%`, checked 76 monitor/active symbols as supported USD-M
+  `STORJUSDT 0.266%`, checked 80 monitor/active symbols as supported USD-M
   ASCII contracts, matched `10/10` active ticker priority candidates, reported
   paper graduation `real_closed=0/30 missing=30`, and completed the controlled
   paper closed loop.
@@ -194,6 +194,31 @@ hardening mainnet market data:
   `http://127.0.0.1:8080` completed in `79.6s` without an Nginx `504`. The
   request returned three paper-top attempts, starting with
   `BREVUSDT -> SKIP_STALE_CANDIDATE`, and added retry candidate `TRBUSDT`.
+
+## Codex Strategy Generation Status
+
+The project now distinguishes local rule fallback from real Codex-generated
+strategies:
+
+- Codex-generated entries require `AI_ENABLED=true`,
+  `AI_STRATEGY_PROVIDER=codex_cli`, and
+  `REQUIRE_CODEX_STRATEGY_FOR_ENTRY=true`.
+- Codex CLI readiness is exposed as `ready_for_generation` and
+  `availability_reason` in `/api/system/readiness`,
+  `/api/autotrade/diagnostics`, and the monitor cards.
+- Docker Compose no longer passes a Windows host `CODEX_COMMAND` into Linux
+  containers. It maps `DOCKER_CODEX_COMMAND` to container `CODEX_COMMAND`.
+- The current Docker backend image does not include Codex CLI. Runtime evidence
+  after rebuild shows provider `rule`, Codex `required_for_entry=false`,
+  `ready_for_generation=false`, and
+  `availability_reason=codex_command_missing`. This is now visible and blocks
+  Codex-required entry instead of silently falling back to a rule strategy.
+- Strategy quality feedback now emits a structured
+  `ai_strategy_quality_feedback.candidate_feedback.generation_gate`. If
+  `allow_open_plan=false`, the Codex prompt requires WAIT and includes the gate
+  reasons in `upgrade_condition`. Hard avoid-repeat buckets from losing
+  AI-generated strategies therefore become a test-covered strategy-generation
+  gate, before the downstream risk model and live readiness gates.
 
 ## Controlled Paper Closed Loop
 

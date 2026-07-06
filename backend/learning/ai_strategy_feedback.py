@@ -84,6 +84,11 @@ class AIStrategyFeedback:
         matches = [match for match in matches if match["samples"] > 0]
         hard_avoid = [match for match in matches if match["severity"] == "AVOID"]
         review = [match for match in matches if match["severity"] == "REVIEW"]
+        generation_gate = self._generation_gate(
+            hard_avoid=hard_avoid,
+            review=review,
+            feature=feature,
+        )
         return {
             "enabled": True,
             "symbol": item.symbol,
@@ -91,6 +96,7 @@ class AIStrategyFeedback:
             "strategy_kind": strategy_kind,
             "closed_ai_samples": len(samples),
             "quality_bias": "AVOID_REPEAT" if hard_avoid else ("REVIEW" if review else "NEUTRAL"),
+            "generation_gate": generation_gate,
             "matches": matches[:6],
             "avoid_repeating": hard_avoid[:4],
             "review_lessons": review[:4],
@@ -127,6 +133,7 @@ class AIStrategyFeedback:
             },
             "candidate_feedback": {
                 "quality_bias": evaluation["quality_bias"],
+                "generation_gate": evaluation["generation_gate"],
                 "matches": evaluation["matches"][:4],
                 "avoid_repeating": evaluation["avoid_repeating"][:3],
                 "review_lessons": evaluation["review_lessons"][:3],
@@ -936,6 +943,55 @@ class AIStrategyFeedback:
             "instruction": (
                 "If material_improvements_vs_losses is non-empty and hard avoid_repeating is empty, Codex may create a "
                 "paper-only validation OPEN when risk geometry and costs are valid. If overlaps_with_losing_risks dominate, WAIT."
+            ),
+        }
+
+    def _generation_gate(
+        self,
+        *,
+        hard_avoid: list[dict[str, Any]],
+        review: list[dict[str, Any]],
+        feature: dict[str, Any],
+    ) -> dict[str, Any]:
+        failure_risks = _string_set(
+            feature.get("failure_risks")
+            or feature.get("negative_factors")
+            or feature.get("main_failure_risks")
+            or []
+        )
+        reasons: list[str] = []
+        if hard_avoid:
+            reasons.append("avoid_repeating")
+
+        estimated_win_rate = _float(feature.get("estimated_win_rate"))
+        paper_floor = max(0.50, float(settings.strategy_min_paper_win_rate or 0.53) - 0.03)
+        if estimated_win_rate > 0 and estimated_win_rate < paper_floor:
+            reasons.append("cyqnt_estimated_win_rate_low")
+
+        feature_score = _float(feature.get("feature_score"))
+        if feature_score > 0 and feature_score < 45.0:
+            reasons.append("cyqnt_feature_score_low")
+
+        hard_failure_risks = {
+            "current_wick_extreme",
+            "fake_breakout_high",
+            "market_stale",
+            "side_conflict",
+            "geometry_invalid",
+        }
+        for risk in sorted(failure_risks.intersection(hard_failure_risks)):
+            reasons.append(f"hard_failure_risk:{risk}")
+
+        reasons = list(dict.fromkeys(reasons))
+        return {
+            "allow_open_plan": not reasons,
+            "review_required": bool(review and not reasons),
+            "reasons": reasons,
+            "review_reasons": [str(match.get("name") or "") for match in review[:4] if match.get("name")],
+            "instruction": (
+                "If allow_open_plan is false, Codex must return WAIT. "
+                "If review_required is true, Codex may generate only a paper-only validation OPEN when the plan states "
+                "material evidence improvements and passes local quality/risk gates."
             ),
         }
 

@@ -51,6 +51,7 @@ Hard rules:
 23. Generate from the latest refreshed market snapshot only. Use market_freshness, radar, market_changes, current_price, and cyqnt_feature_enhancement as the source of truth. If market_freshness.latest_market_required is true but pre_ai_market_refresh.scan_ok is false, symbol_present_after_scan is false, item_age_seconds is stale, or the refreshed side/price conflicts with your planned side/geometry, return WAIT. Never reuse stale direction geometry from an older scan.
 24. Read strategy_geometry_sample before choosing OPEN geometry. When strategy_geometry_sample.status is ok, use selected_geometry as the preferred TP/SL geometry unless current market invalidates it. When status is weak or unavailable, explicitly lower confidence, keep live=false, and do not claim the strategy has production-grade sample support.
 25. Use universal_anomaly_model as coin-agnostic microstructure confirmation. If its direction disagrees with side_bias or is NEUTRAL, lower confidence and prefer WAIT unless current cyqnt, structure, fund, and geometry evidence clearly overrides it. Never use universal_anomaly_model alone as order permission.
+26. Read ai_strategy_quality_feedback.candidate_feedback.generation_gate. If generation_gate.allow_open_plan is false, return WAIT and include the gate reasons in upgrade_condition. If review_required is true, OPEN is allowed only for paper-only validation with material improvements versus the reviewed losing bucket and a complete strategy_contract.
 
 OPEN strategy_contract shape:
 - strategy_contract must be an object, never null, for OPEN_LONG or OPEN_SHORT.
@@ -426,10 +427,20 @@ class CodexCLIStrategyClient:
 
     def status(self) -> dict[str, Any]:
         resolved = shutil.which(self.codex_command) or ""
+        command_found = bool(resolved)
+        schema_exists = self.schema_path.exists()
+        if not command_found:
+            availability_reason = "codex_command_missing"
+        elif not schema_exists:
+            availability_reason = "strategy_schema_missing"
+        else:
+            availability_reason = "ok"
         return {
             "configured_command": self.codex_command,
             "resolved_command": resolved or self.codex_command,
-            "command_found": bool(resolved),
+            "command_found": command_found,
+            "ready_for_generation": bool(command_found and schema_exists),
+            "availability_reason": availability_reason,
             "model_provider": normalized_codex_model_provider() or "openai",
             "provider_name": settings.codex_provider_name,
             "provider_requires_openai_auth": bool(settings.codex_provider_requires_openai_auth),
@@ -445,7 +456,7 @@ class CodexCLIStrategyClient:
                 ),
             },
             "schema_path": str(self.schema_path),
-            "schema_exists": self.schema_path.exists(),
+            "schema_exists": schema_exists,
             "invocation_count": self.invocation_count,
             "last_invoked_ms": self.last_invoked_ms,
             "last_status": self.last_status,

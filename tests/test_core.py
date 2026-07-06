@@ -474,6 +474,41 @@ def test_codex_cli_failure_waits_instead_of_rule_open(monkeypatch):
     assert status["last_action"] == "WAIT"
     assert status["last_error"] == "codex_invalid_json"
 
+def test_codex_cli_status_reports_generation_unavailable_when_command_missing(monkeypatch):
+    monkeypatch.setattr("backend.ai_strategy.codex_cli_strategy_client.shutil.which", lambda _command: "")
+
+    client = CodexCLIStrategyClient(codex_command="missing-codex")
+    status = client.status()
+
+    assert status["command_found"] is False
+    assert status["ready_for_generation"] is False
+    assert status["availability_reason"] == "codex_command_missing"
+
+def test_ai_strategy_status_does_not_claim_codex_invocation_when_command_missing(monkeypatch):
+    import backend.ai_strategy.openai_strategy_client as strategy_client_module
+
+    monkeypatch.setattr(settings, "ai_strategy_provider", "codex_cli")
+    monkeypatch.setattr(settings, "ai_enabled", True)
+    monkeypatch.setattr(settings, "require_codex_strategy_for_entry", True)
+    monkeypatch.setattr(settings, "max_open_positions", 1)
+    position_registry.open.clear()
+    monkeypatch.setattr(
+        strategy_client_module.codex_cli_strategy_client,
+        "status",
+        lambda: {
+            "command_found": False,
+            "ready_for_generation": False,
+            "availability_reason": "codex_command_missing",
+            "schema_exists": True,
+        },
+    )
+
+    status = strategy_client_module.openai_strategy_client.status(candidate_count=1, candidate_source="paper_top")
+
+    assert status["provider"] == "codex_cli"
+    assert status["will_invoke_for_current_candidates"] is False
+    assert status["not_invoked_reason"] == "codex_command_missing"
+
 def test_codex_open_requires_valid_strategy_contract(monkeypatch):
     item = high_quality_item(symbol="NOCONTRACTOPENUSDT", side="LONG", price=100)
     payload = {
@@ -4566,6 +4601,8 @@ def test_strategy_research_prompts_enforce_signal_risk_execution():
     assert "cyqnt_feature_enhancement" in CODEX_PROMPT
     assert "universal_anomaly_model" in CODEX_PROMPT
     assert "coin-agnostic microstructure confirmation" in CODEX_PROMPT
+    assert "generation_gate" in CODEX_PROMPT
+    assert "allow_open_plan is false" in CODEX_PROMPT
     assert "production_acceptance strict mode" in CODEX_PROMPT
     assert "downstream quality gates, risk_model, and live_readiness" in CODEX_PROMPT
     assert "not as an automatic veto" not in CODEX_PROMPT
@@ -4994,8 +5031,11 @@ def test_ai_strategy_feedback_context_flags_losing_ai_bucket(monkeypatch):
 
     assert report["quality_bias"] == "AVOID_REPEAT"
     assert report["avoid_repeating"][0]["name"] == "exact_symbol_side"
+    assert report["generation_gate"]["allow_open_plan"] is False
+    assert "avoid_repeating" in report["generation_gate"]["reasons"]
     assert context["ai_strategy_quality_feedback"]["candidate_feedback"]["quality_bias"] == "AVOID_REPEAT"
     assert context["ai_strategy_quality_feedback"]["candidate_feedback"]["avoid_repeating"]
+    assert context["ai_strategy_quality_feedback"]["candidate_feedback"]["generation_gate"]["allow_open_plan"] is False
 
 def test_ai_strategy_feedback_releases_hard_avoid_after_recent_bucket_recovers():
     now = now_ms()
@@ -5393,6 +5433,8 @@ def test_system_readiness_report_marks_codex_wait_and_paper_closed_loop(monkeypa
             "not_invoked_reason": "",
             "codex_cli": {
                 "command_found": False,
+                "ready_for_generation": False,
+                "availability_reason": "codex_command_missing",
                 "model": "gpt-test",
                 "last_status": "never_invoked",
                 "last_error": "",
@@ -5403,9 +5445,35 @@ def test_system_readiness_report_marks_codex_wait_and_paper_closed_loop(monkeypa
     report = system_readiness.system_readiness_report()
 
     assert report["wait"]["candidate_symbols"] == ["READYWAITUSDT"]
+    assert report["codex"]["ready_for_generation"] is False
+    assert report["codex"]["availability_reason"] == "codex_command_missing"
     assert report["paper_learning"]["closed_loop_enabled"] is True
     assert any(blocker["code"] == "codex_command_missing" for blocker in report["wait"]["blockers"])
     assert any(blocker["code"] == "codex_command_missing" for blocker in report["blockers"])
+
+
+def test_compact_ai_strategy_status_exposes_codex_generation_readiness():
+    status = main_module._compact_ai_strategy_status(
+        {
+            "enabled": True,
+            "provider": "codex_cli",
+            "candidate_source": "paper_top",
+            "candidate_count_before_ai": 1,
+            "will_invoke_for_current_candidates": False,
+            "not_invoked_reason": "codex_command_missing",
+            "codex_cli": {
+                "command_found": False,
+                "ready_for_generation": False,
+                "availability_reason": "codex_command_missing",
+                "schema_exists": True,
+                "model": "gpt-test",
+            },
+            "deepseek": {},
+        }
+    )
+
+    assert status["codex_cli"]["ready_for_generation"] is False
+    assert status["codex_cli"]["availability_reason"] == "codex_command_missing"
 
 
 def test_system_readiness_exposes_paper_graduation_progress(monkeypatch):

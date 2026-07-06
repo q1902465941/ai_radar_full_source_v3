@@ -120,6 +120,22 @@ The v2 dashboard and latest radar endpoints therefore prefer the detailed
 legacy monitor's live `/api/radar` payload, with a bounded SQLite snapshot
 fallback when the live monitor is briefly unavailable.
 
+Codex strategy generation is not implied by the rule-mode landing defaults.
+Enable it deliberately:
+
+```env
+AI_ENABLED=true
+AI_STRATEGY_PROVIDER=codex_cli
+REQUIRE_CODEX_STRATEGY_FOR_ENTRY=true
+```
+
+Use `CODEX_COMMAND` for local host runs. Docker Compose maps
+`DOCKER_CODEX_COMMAND` into the container as `CODEX_COMMAND` so a Windows host
+path cannot leak into the Linux backend. The container must include the Codex
+CLI, otherwise `/api/system/readiness`, `/api/autotrade/diagnostics`, and the
+monitor cards report `availability_reason=codex_command_missing`, and strategy
+generation waits instead of opening a rule fallback trade.
+
 Persistent mounts:
 
 - `./data:/app/data`

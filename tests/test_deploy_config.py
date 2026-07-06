@@ -50,6 +50,8 @@ def test_docker_compose_passes_mainnet_market_runtime_env_to_backend_services():
     assert "MONITOR_LEGACY_DB_FALLBACK_ENABLED: ${MONITOR_LEGACY_DB_FALLBACK_ENABLED:-true}" in compose
     assert "AI_STRATEGY_PROVIDER: ${AI_STRATEGY_PROVIDER:-rule}" in compose
     assert "REQUIRE_CODEX_STRATEGY_FOR_ENTRY: ${REQUIRE_CODEX_STRATEGY_FOR_ENTRY:-false}" in compose
+    assert "CODEX_COMMAND: ${DOCKER_CODEX_COMMAND:-codex}" in compose
+    assert "CODEX_COMMAND: ${CODEX_COMMAND:-}" not in compose
     assert "DB_PATH: ${DOCKER_DB_PATH:-data/ai_radar.db}" in compose
     assert "DB_PATH: ${DB_PATH:-data/ai_radar.db}" not in compose
 
@@ -85,6 +87,8 @@ def test_env_example_defaults_to_mainnet_public_market_data():
     assert "BINANCE_ASCII_SYMBOLS_ONLY=true" in env_example
     assert "AI_STRATEGY_PROVIDER=rule" in env_example
     assert "REQUIRE_CODEX_STRATEGY_FOR_ENTRY=false" in env_example
+    assert "CODEX_COMMAND=codex" in env_example
+    assert "DOCKER_CODEX_COMMAND=codex" in env_example
     assert "DOCKER_DB_PATH=data/ai_radar.db" in env_example
     assert "MONITOR_LEGACY_BACKEND_URL=" in env_example
     assert "MONITOR_LEGACY_BACKEND_URL=http://backend:8001" not in env_example

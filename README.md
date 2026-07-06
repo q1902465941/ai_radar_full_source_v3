@@ -102,6 +102,23 @@ Compose supplies `MONITOR_LEGACY_BACKEND_URL=http://backend:8001` by default so
 the v2 dashboard and latest radar API read the same live monitor feed as the
 detailed site.
 
+## Codex Strategy Generation
+
+Codex-generated entries are enabled only when all three are true:
+
+```env
+AI_ENABLED=true
+AI_STRATEGY_PROVIDER=codex_cli
+REQUIRE_CODEX_STRATEGY_FOR_ENTRY=true
+```
+
+For local Windows runs, `CODEX_COMMAND=codex` uses the host Codex CLI. Docker
+uses `DOCKER_CODEX_COMMAND` and does not inherit a host Windows executable path;
+the backend image must actually contain a runnable Codex CLI for the monitor to
+show `Codex READY`. If it is missing, readiness reports
+`availability_reason=codex_command_missing` and strategy generation returns
+WAIT instead of silently falling back to rule entries.
+
 ## Safety Defaults
 
 The default configuration is not live trading:

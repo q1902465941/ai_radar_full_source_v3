@@ -65,6 +65,7 @@ function renderRealtimeStrategyPlans(out) {
   const plansEl = document.getElementById('realtimeStrategyPlans');
   const ai = out.ai_strategy || {};
   const providerStatus = ai[out.provider] || {};
+  const codexStatus = ai.codex_cli || {};
   const lastPlan = out.last_plan || {};
   const plan = lastPlan.plan || {};
   const radarWeights = out.radar_weight_calibration || {};
@@ -75,6 +76,7 @@ function renderRealtimeStrategyPlans(out) {
   if (summaryEl) {
     summaryEl.innerHTML = [
       ['provider', out.provider || '--'],
+      ['codex ready', codexStatus.ready_for_generation ? 'READY' : `BLOCKED: ${codexStatus.availability_reason || '--'}`],
       ['candidates', (out.candidate_symbols || []).join(', ') || '--'],
       ['last symbol', plan.symbol || providerStatus.last_symbol || '--'],
       ['action', plan.action || providerStatus.last_action || '--'],

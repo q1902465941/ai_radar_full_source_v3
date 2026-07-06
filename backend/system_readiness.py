@@ -424,6 +424,8 @@ def codex_status(ai_status: dict[str, Any]) -> dict[str, Any]:
         "ai_enabled": bool(ai_status.get("enabled")),
         "provider": ai_status.get("provider"),
         "command_found": bool(codex.get("command_found")),
+        "ready_for_generation": bool(codex.get("ready_for_generation")),
+        "availability_reason": codex.get("availability_reason"),
         "model": codex.get("model"),
         "timeout_seconds": codex.get("timeout_seconds"),
         "reasoning_effort": codex.get("reasoning_effort"),

@@ -1363,6 +1363,9 @@ def _compact_ai_strategy_status(status: dict[str, Any]) -> dict[str, Any]:
         "not_invoked_reason": status.get("not_invoked_reason"),
         "codex_cli": {
             "command_found": codex.get("command_found"),
+            "ready_for_generation": codex.get("ready_for_generation"),
+            "availability_reason": codex.get("availability_reason"),
+            "schema_exists": codex.get("schema_exists"),
             "model": codex.get("model"),
             "timeout_seconds": codex.get("timeout_seconds"),
             "reasoning_effort": codex.get("reasoning_effort"),
