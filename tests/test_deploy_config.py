@@ -120,6 +120,8 @@ def test_docker_stack_verification_script_checks_monitor_and_mainnet_market_data
     script = (ROOT / "scripts" / "verify_docker_stack.ps1").read_text(encoding="utf-8")
 
     assert '[string]$MonitorBaseUrl = "http://127.0.0.1:8080"' in script
+    assert "Read-HttpTextWithRetry" in script
+    assert "Start-Sleep -Seconds" in script
     assert "$MonitorBaseUrl/radar" in script
     assert "AI RADAR SYSTEM" in script
     assert "AI Radar Control Center" in script

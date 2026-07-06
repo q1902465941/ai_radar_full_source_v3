@@ -250,6 +250,49 @@ def test_state_prefers_realtime_quote_over_cached_major_snapshot(monkeypatch):
     assert majors["BTCUSDT"]["source"] == "book_ticker_mid"
 
 
+def test_state_exposes_market_data_contract_for_monitor_debugging(monkeypatch):
+    monkeypatch.setattr(settings, "market_data_mode", "binance")
+    monkeypatch.setattr(binance_rest, "last_public_source", "mainnet")
+    monkeypatch.setattr(
+        market_service,
+        "last_snapshots",
+        {
+            "BTCUSDT": MarketSnapshot("BTCUSDT", 62661.9, 0.1, 0.2, 0.3, 1, 0, 0, 0.5, 0.5, 0, 0.1, 0.1),
+            "ETHUSDT": MarketSnapshot("ETHUSDT", 3100.5, 0.1, 0.2, 0.3, 1, 0, 0, 0.5, 0.5, 0, 0.1, 0.1),
+        },
+    )
+    monkeypatch.setattr(
+        main_module.radar_engine,
+        "scan_status",
+        lambda compact=True: {
+            "in_progress": False,
+            "top50_count": 12,
+            "last_error": "",
+            "market_refresh": {
+                "source": "ws_ticker",
+                "degraded": False,
+                "error": "",
+                "snapshot_count": 80,
+                "symbol_count": 80,
+            },
+            "active_coins": {"active_count": 7, "active_symbols": ["BTCUSDT"]},
+            "dynamic_stream": {"active_count": 3, "running": True, "last_error": ""},
+        },
+    )
+
+    out = asyncio.run(main_module.state())
+
+    assert out["major_markets"] == out["major"]
+    assert out["scan_status"]["top50_count"] == 12
+    assert out["market_data"]["mode"] == "binance"
+    assert out["market_data"]["public_source"] == "mainnet"
+    assert out["market_data"]["refresh_source"] == "ws_ticker"
+    assert out["market_data"]["degraded"] is False
+    assert out["market_data"]["snapshot_count"] == 80
+    assert out["market_data"]["active_coin_count"] == 7
+    assert out["market_data"]["dynamic_stream_count"] == 3
+
+
 def test_direction_short():
     s=MarketSnapshot("XUSDT",1,-1,-2,-3,2.5,1.0,0,0.3,0.7,-.2,.5,.1)
     assert direction(s)=="SHORT"

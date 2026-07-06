@@ -39,6 +39,28 @@ function Read-Json {
     return $parsed
 }
 
+function Read-HttpTextWithRetry {
+    param(
+        [string]$Url,
+        [int]$Retries = 12,
+        [int]$DelaySeconds = 3,
+        [int]$TimeoutSec = 20
+    )
+    $lastError = ""
+    for ($attempt = 1; $attempt -le $Retries; $attempt++) {
+        try {
+            return Invoke-WebRequest -Uri $Url -TimeoutSec $TimeoutSec
+        }
+        catch {
+            $lastError = $_.Exception.Message
+            if ($attempt -ge $Retries) {
+                throw "HTTP request to $Url failed after $Retries attempts: $lastError"
+            }
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+}
+
 function Read-ApiToken {
     if (-not [string]::IsNullOrWhiteSpace($ApiToken)) {
         return $ApiToken
@@ -351,7 +373,7 @@ Invoke-Step "compose config" {
 }
 
 Invoke-Step "legacy monitor page" {
-    $response = Invoke-WebRequest -Uri "$MonitorBaseUrl/radar" -TimeoutSec 15
+    $response = Read-HttpTextWithRetry -Url "$MonitorBaseUrl/radar" -Retries 12 -DelaySeconds 3 -TimeoutSec 20
     Assert-True ($response.StatusCode -eq 200) "monitor /radar did not return HTTP 200"
     Assert-True ($response.Content.Contains("AI RADAR SYSTEM")) "monitor page is missing legacy AI RADAR SYSTEM branding"
     Assert-True (-not $response.Content.Contains("AI Radar Control Center")) "monitor page is still serving the React migration shell"

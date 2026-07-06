@@ -202,6 +202,18 @@ async function refreshTop() {
   if (!bar) return;
   const s = await j('/api/state');
   const majors = s.major || [];
+  const market = s.market_data || {};
+  const sourceParts = [market.public_source || s.market_data_source || 'online', market.refresh_source].filter(Boolean);
+  const sourceText = sourceParts.join(' / ');
+  const marketDetail = [
+    `mode=${market.mode || '--'}`,
+    `top50=${market.top50_count ?? s.top50_count ?? '--'}`,
+    `snapshots=${market.snapshot_count ?? '--'}`,
+    `active=${market.active_coin_count ?? '--'}`,
+    `dynamic=${market.dynamic_stream_count ?? '--'}`,
+    market.degraded ? `error=${market.error || 'degraded'}` : 'health=ok',
+  ].join(' | ');
+  const qualityText = market.degraded ? 'DEGRADED' : `Top50 ${market.top50_count ?? s.top50_count ?? '--'}`;
   bar.innerHTML = `${majors.map((x) => {
     const hasPrice = Number(x.price || 0) > 0;
     const changeValue = finiteNumber(x.change);
@@ -224,7 +236,8 @@ async function refreshTop() {
   <div class="status-card"><span>市场热度</span><b>${fmt(s.market_heat, 0)}</b></div>
   <div class="status-card"><span>警报状态</span><b>${s.alert_count || 0}</b></div>
   <div class="status-card"><span>电报推送</span><b>正常</b></div>
-  <div class="status-card"><span>行情源</span><b>${s.market_data_source || 'online'}</b></div>`;
+  <div class="status-card" title="${escapeHtml(marketDetail)}"><span>Market Source</span><b>${escapeHtml(sourceText || 'online')}</b></div>
+  <div class="status-card" title="${escapeHtml(marketDetail)}"><span>Market Data</span><b>${escapeHtml(qualityText)}</b></div>`;
 }
 
 function setScanStatus(message, busy = false) {

@@ -209,6 +209,36 @@ def _optional_float(value: Any) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _state_market_data(scan_status: dict[str, Any]) -> dict[str, Any]:
+    refresh = scan_status.get("market_refresh") if isinstance(scan_status.get("market_refresh"), dict) else {}
+    active = scan_status.get("active_coins") if isinstance(scan_status.get("active_coins"), dict) else {}
+    dynamic = scan_status.get("dynamic_stream") if isinstance(scan_status.get("dynamic_stream"), dict) else {}
+    snapshot_count = _safe_int(refresh.get("snapshot_count"), len(market_service.last_snapshots))
+    top50_count = _safe_int(scan_status.get("top50_count"), len(radar_engine.top50))
+    return {
+        "mode": settings.market_data_mode,
+        "public_source": binance_rest.last_public_source,
+        "refresh_source": str(refresh.get("source") or ""),
+        "degraded": bool(refresh.get("degraded")),
+        "error": str(refresh.get("error") or ""),
+        "snapshot_count": snapshot_count,
+        "symbol_count": _safe_int(refresh.get("symbol_count"), snapshot_count),
+        "top50_count": top50_count,
+        "active_coin_count": _safe_int(active.get("active_count")),
+        "active_symbols": list(active.get("active_symbols") or [])[:50],
+        "dynamic_stream_count": _safe_int(dynamic.get("active_count")),
+        "dynamic_stream_running": bool(dynamic.get("running")),
+        "dynamic_stream_error": str(dynamic.get("last_error") or ""),
+    }
+
+
 def _ws_ticker_rows_by_symbol(symbols: list[str]) -> dict[str, dict[str, Any]]:
     wanted = {str(symbol or "").upper() for symbol in symbols if symbol}
     rows: dict[str, dict[str, Any]] = {}
@@ -414,12 +444,20 @@ async def _state_major_rows() -> list[dict[str, Any]]:
 @app.get("/api/state")
 async def state():
     majors = await _state_major_rows()
-    return {"last_scan_time":radar_engine.last_scan_time,"market_heat":radar_engine.market_heat,"alert_count":radar_engine.alert_count,"major":majors,"auto_enabled":autotrader.enabled,"market_data_source":binance_rest.last_public_source}
-    majors=[]
-    for sym,label in [("BTCUSDT","BTC 永续"),("ETHUSDT","ETH 永续"),("BNBUSDT","BNB 永续"),("SOLUSDT","SOL 永续")]:
-        s=market_service.last_snapshots.get(sym)
-        majors.append({"symbol":sym,"label":label,"price":s.price if s else 0,"change":s.change_5m if s else 0})
-    return {"last_scan_time":radar_engine.last_scan_time,"market_heat":radar_engine.market_heat,"alert_count":radar_engine.alert_count,"major":majors,"auto_enabled":autotrader.enabled,"market_data_source":binance_rest.last_public_source}
+    scan_status = _radar_api_scan_status()
+    market_data = _state_market_data(scan_status)
+    return {
+        "last_scan_time":radar_engine.last_scan_time,
+        "market_heat":radar_engine.market_heat,
+        "alert_count":radar_engine.alert_count,
+        "major":majors,
+        "major_markets":majors,
+        "auto_enabled":autotrader.enabled,
+        "market_data_source":binance_rest.last_public_source,
+        "scan_status":scan_status,
+        "market_data":market_data,
+        "top50_count":market_data["top50_count"],
+    }
 
 @app.get("/api/radar")
 async def api_radar():
