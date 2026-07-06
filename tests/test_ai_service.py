@@ -29,7 +29,7 @@ def _plan(symbol="BTCUSDT"):
     )
 
 
-def _open_plan(item):
+def _open_plan(item, provider="codex_cli"):
     plan = StrategyPlan(
         strategy_id="strategy-open",
         action="OPEN_LONG",
@@ -44,7 +44,7 @@ def _open_plan(item):
         confidence=80,
         reason="test open",
         wait_type="",
-        raw={"provider": "codex_cli", "model": "fake-model"},
+        raw={"provider": provider, "model": "fake-model"},
     )
     plan.raw["strategy_contract"] = build_rule_contract(item, plan)
     plan.raw["strategy_contract_quality"] = {"ok": True, "reasons": []}
@@ -253,6 +253,7 @@ def test_ai_service_audit_summary_counts_tradable_strategy_tasks(tmp_path):
     assert audit["last_tradable_strategy"]["provider"] == "codex_cli"
     assert audit["last_tradable_strategy"]["candidate_source"] == "strict"
     assert audit["tradable_strategy_by_source"]["strict"] == 1
+    assert audit["tradable_strategy_by_source_provider"]["strict"]["codex_cli"] == 1
     assert audit["recent_strategy_tasks"][0]["valid"] is False
     assert audit["recent_strategy_tasks"][0]["candidate_source"] == "strict"
     assert audit["recent_strategy_tasks"][0]["validator_reason"] in {"sl_too_close", "tp1_too_close"}

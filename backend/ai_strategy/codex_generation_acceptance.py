@@ -335,8 +335,20 @@ async def run_acceptance() -> tuple[int, dict[str, Any]]:
         if isinstance(audit.get("tradable_strategy_by_source"), dict)
         else {}
     )
+    tradable_by_source_provider = (
+        audit.get("tradable_strategy_by_source_provider")
+        if isinstance(audit.get("tradable_strategy_by_source_provider"), dict)
+        else {}
+    )
+    production_acceptance_providers = (
+        tradable_by_source_provider.get("production_acceptance")
+        if isinstance(tradable_by_source_provider.get("production_acceptance"), dict)
+        else {}
+    )
     if int(tradable_by_source.get("production_acceptance") or 0) < 1:
         failures.append("ai_task_audit_missing_production_acceptance_tradable_strategy")
+    if int(production_acceptance_providers.get("codex_cli") or 0) < 1:
+        failures.append("ai_task_audit_missing_production_acceptance_codex_tradable_strategy")
     last_tradable = audit.get("last_tradable_strategy") if isinstance(audit.get("last_tradable_strategy"), dict) else {}
     recent_tasks = audit.get("recent_strategy_tasks") if isinstance(audit.get("recent_strategy_tasks"), list) else []
     after_total = int(audit.get("total") or 0)
@@ -372,6 +384,7 @@ async def run_acceptance() -> tuple[int, dict[str, Any]]:
         "ai_task_audit": {
             "tradable_strategy_count": audit.get("tradable_strategy_count"),
             "tradable_strategy_by_source": tradable_by_source,
+            "tradable_strategy_by_source_provider": tradable_by_source_provider,
             "invalid_strategy_count": audit.get("invalid_strategy_count"),
             "last_tradable_strategy": last_tradable,
             "current_acceptance_task": current_acceptance_task,
@@ -412,6 +425,8 @@ def _find_current_acceptance_task(tasks: list[Any], symbol: str) -> dict[str, An
         if not isinstance(task, dict):
             continue
         if task.get("candidate_source") != "production_acceptance":
+            continue
+        if task.get("provider") != "codex_cli":
             continue
         if task.get("symbol") != symbol:
             continue

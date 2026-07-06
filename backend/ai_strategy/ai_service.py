@@ -140,13 +140,17 @@ class AIService:
             if isinstance(row.validation_json, dict)
         ]
         tradable_by_source: dict[str, int] = {}
+        tradable_by_source_provider: dict[str, dict[str, int]] = {}
         open_by_source: dict[str, int] = {}
         invalid_by_source: dict[str, int] = {}
         for row in success_rows:
             validation = row.validation_json if isinstance(row.validation_json, dict) else {}
             source = _task_candidate_source(row)
+            provider = _task_provider(row, validation)
             if validation.get("tradable_strategy") is True:
                 tradable_by_source[source] = tradable_by_source.get(source, 0) + 1
+                source_providers = tradable_by_source_provider.setdefault(source, {})
+                source_providers[provider] = source_providers.get(provider, 0) + 1
             if validation.get("opens") is True:
                 open_by_source[source] = open_by_source.get(source, 0) + 1
             if validation.get("valid") is False:
@@ -173,6 +177,7 @@ class AIService:
             "open_strategy_count": sum(1 for row in validation_rows if row.get("opens") is True),
             "wait_strategy_count": sum(1 for row in validation_rows if row.get("action") == "WAIT"),
             "tradable_strategy_by_source": tradable_by_source,
+            "tradable_strategy_by_source_provider": tradable_by_source_provider,
             "open_strategy_by_source": open_by_source,
             "invalid_strategy_by_source": invalid_by_source,
             "last_tradable_strategy": last_tradable,
@@ -224,7 +229,7 @@ def _audit_task_snapshot(row: AITaskRecord) -> dict[str, Any]:
         "task_id": row.task_id,
         "state": row.state,
         "candidate_source": _task_candidate_source(row),
-        "provider": validation.get("provider") or row.provider,
+        "provider": _task_provider(row, validation),
         "model": row.model,
         "action": validation.get("action") or output.get("action"),
         "symbol": validation.get("symbol") or output.get("symbol"),
@@ -245,6 +250,12 @@ def _task_candidate_source(row: AITaskRecord) -> str:
         return source
     nested = context.get("position_context") if isinstance(context.get("position_context"), dict) else {}
     return _candidate_source(nested) or "unknown"
+
+
+def _task_provider(row: AITaskRecord, validation: dict[str, Any] | None = None) -> str:
+    validation = validation if isinstance(validation, dict) else {}
+    provider = str(validation.get("provider") or row.provider or "").strip().lower()
+    return provider or "unknown"
 
 
 def _jsonable_dataclass(value: Any) -> dict[str, Any]:

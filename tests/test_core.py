@@ -496,6 +496,34 @@ def test_codex_generation_acceptance_context_overrides_learning_generation_gate(
     assert attribution["profit_factor"] >= 1.5
     assert event["win_rate"] >= 0.60
 
+
+def test_codex_generation_acceptance_current_task_requires_codex_provider():
+    from backend.ai_strategy.codex_generation_acceptance import _find_current_acceptance_task
+
+    tasks = [
+        {
+            "candidate_source": "production_acceptance",
+            "provider": "rule",
+            "symbol": "BTCUSDT",
+            "action": "OPEN_LONG",
+            "tradable_strategy": True,
+            "valid": True,
+        },
+        {
+            "candidate_source": "production_acceptance",
+            "provider": "codex_cli",
+            "symbol": "BTCUSDT",
+            "action": "OPEN_LONG",
+            "tradable_strategy": True,
+            "valid": True,
+        },
+    ]
+
+    current = _find_current_acceptance_task(tasks, "BTCUSDT")
+
+    assert current["provider"] == "codex_cli"
+
+
 def test_codex_cli_uses_fast_model_for_strict_review(monkeypatch):
     monkeypatch.setattr(settings, "codex_model", "gpt-5.5")
     monkeypatch.setattr(settings, "codex_reasoning_effort", "medium")

@@ -100,6 +100,7 @@ def test_strategy_ai_page_surfaces_tradable_strategy_audit():
 
     assert "tradable_strategy_count" in template
     assert "tradable_strategy_by_source" in template
+    assert "tradable_strategy_by_source_provider" in template
     assert "invalid_strategy_count" in template
     assert "last_tradable_strategy" in template
     assert "candidate_source" in template
@@ -175,7 +176,9 @@ def test_codex_strategy_generation_verification_script_runs_real_docker_codex_pa
     assert "codex_real_strategy_generated" in module
     assert "tradable_strategy_count" in module
     assert "tradable_strategy_by_source" in module
+    assert "tradable_strategy_by_source_provider" in module
     assert "production_acceptance" in module
+    assert "ai_task_audit_missing_production_acceptance_codex_tradable_strategy" in module
     assert "last_tradable_strategy" in module
     assert "recent_strategy_tasks" in module
     assert "ai_task_audit_missing_current_production_acceptance_tradable_strategy" in module
