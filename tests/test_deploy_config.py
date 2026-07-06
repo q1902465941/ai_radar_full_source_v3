@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -189,6 +190,60 @@ def test_codex_strategy_generation_verification_script_runs_real_docker_codex_pa
     assert '"OPEN_LONG"' in module
     assert "codex_cli_unavailable" in module
     assert "strategy_contract_quality" in module
+
+
+def test_enable_codex_strategy_mode_script_persists_host_env_without_leaking_secrets(tmp_path):
+    script = ROOT / "scripts" / "enable_codex_strategy_mode.ps1"
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "API_TOKEN=secret-token",
+                "BINANCE_API_SECRET=secret-binance",
+                "AI_ENABLED=false",
+                "AI_STRATEGY_PROVIDER=rule",
+                "REQUIRE_CODEX_STRATEGY_FOR_ENTRY=false",
+                "LIVE_TRADING_ENABLED=true",
+                "LIVE_USE_TEST_ORDER=false",
+                "UNRELATED_SETTING=keep-me",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "-EnvPath",
+            str(env_path),
+            "-NoApiCall",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    output = result.stdout + result.stderr
+    raw = env_path.read_bytes()
+    updated = env_path.read_text(encoding="utf-8")
+    assert not raw.startswith(b"\xef\xbb\xbf")
+    assert "AI_ENABLED=true" in updated
+    assert "AI_STRATEGY_PROVIDER=codex_cli" in updated
+    assert "REQUIRE_CODEX_STRATEGY_FOR_ENTRY=true" in updated
+    assert "LIVE_TRADING_ENABLED=false" in updated
+    assert "LIVE_USE_TEST_ORDER=true" in updated
+    assert "UNRELATED_SETTING=keep-me" in updated
+    assert "API_TOKEN=secret-token" in updated
+    assert "BINANCE_API_SECRET=secret-binance" in updated
+    assert "secret-token" not in output
+    assert "secret-binance" not in output
 
 
 def test_dockerignore_preserves_data_artifacts_for_backend_image():
