@@ -6,6 +6,7 @@ from backend.ai_strategy.ai_service import ai_service
 from backend.config import settings
 from backend.learning.learning_data_audit import learning_data_audit
 from backend.learning.strategy_registry import strategy_registry
+from backend.learning.trade_memory import EXCLUDED_CLOSE_REASONS, trade_memory
 from backend.models import new_id, now_ms
 from backend.positions.position_manager import position_manager
 from backend.positions.position_registry import position_registry
@@ -15,6 +16,21 @@ from backend.research.jesse_adapter import jesse_research_adapter
 from backend.trading.autotrader import autotrader
 from backend.trading.live_readiness import live_readiness
 from backend.trading.performance_guard import performance_guard
+
+
+CODEX_PAPER_COUNTABLE_CLOSE_REASONS = [
+    "TP2",
+    "SL",
+    "LOCKED_STOP",
+    "MAX_HOLD_TIMEOUT",
+    "REVERSE_THESIS_INVALIDATED",
+    "FAKE_BREAKOUT_THESIS_INVALIDATED",
+    "SIGNAL_DECAY_THESIS_INVALIDATED",
+    "ADVERSE_FUND_WEAK_CUT",
+    "ADVERSE_FAKE_CUT",
+    "ADVERSE_REVERSE_CUT",
+    "ADVERSE_SIGNAL_CUT",
+]
 
 
 class AITradeDirector:
@@ -68,6 +84,7 @@ class AITradeDirector:
         ai_after = ai_service.status(candidate_count=len(candidates), candidate_source=candidate_source)
         decision_path = self._decision_path(result)
         opened = any(row.get("opened") for row in decision_path)
+        open_positions = self._codex_open_positions()
         return {
             "ok": True,
             "mode": mode,
@@ -77,6 +94,7 @@ class AITradeDirector:
             "codex_entry": self._codex_entry_status(ai_after),
             "codex_invocation": self._codex_invocation_delta(ai_before, ai_after),
             "decision_path": decision_path,
+            "open_positions": open_positions,
             "graduation": self._graduation_progress(),
             "market_data": autotrader._market_data_health(),
             "performance": performance,
@@ -416,6 +434,7 @@ class AITradeDirector:
                 {
                     "position_id": position.position_id,
                     "strategy_id": position.strategy_id,
+                    "source_signal_id": position.source_signal_id,
                     "symbol": position.symbol,
                     "side": position.side,
                     "status": position.status,
@@ -448,9 +467,52 @@ class AITradeDirector:
                         "noise_budget_r": position.noise_budget_r,
                     },
                     "last_decision": position.last_decision or {},
+                    "learning_countability": self._codex_learning_countability(position, strategy),
                 }
             )
         return out
+
+    def _codex_learning_countability(self, position, strategy: dict[str, Any]) -> dict[str, Any]:
+        radar = trade_memory._radar_for(position.source_signal_id, position.symbol)
+        contract = position.strategy_contract if isinstance(position.strategy_contract, dict) else {}
+        provider = str(strategy.get("provider") or "").strip().lower()
+        source = str(strategy.get("source") or "").strip().lower()
+        if not provider and source.startswith("ai_generated_"):
+            provider = source[len("ai_generated_") :]
+        if not provider:
+            provider = str(contract.get("provider") or contract.get("model_provider") or "").strip().lower()
+
+        strategy_registered = bool(strategy)
+        radar_found = bool(radar)
+        codex_provider = provider == "codex_cli"
+        blocking_reasons: list[str] = []
+        if not radar_found:
+            blocking_reasons.append("radar_snapshot_missing")
+        if not strategy_registered and not provider:
+            blocking_reasons.append("strategy_provider_missing")
+        elif not codex_provider:
+            blocking_reasons.append(f"provider_not_codex_cli:{provider or 'unknown'}")
+
+        return {
+            "will_count_when_closed": bool(radar_found and codex_provider),
+            "requires_radar_context": True,
+            "source_signal_id": position.source_signal_id,
+            "radar_snapshot_found": radar_found,
+            "radar_symbol": str((radar or {}).get("symbol") or ""),
+            "radar_scan_id": str((radar or {}).get("scan_id") or position.source_signal_id or "") if radar_found else "",
+            "strategy_registered": strategy_registered,
+            "strategy_id": position.strategy_id,
+            "provider": provider,
+            "strategy_source": source,
+            "countable_close_reasons": [
+                reason
+                for reason in CODEX_PAPER_COUNTABLE_CLOSE_REASONS
+                if reason not in EXCLUDED_CLOSE_REASONS
+            ],
+            "excluded_close_reasons": sorted(EXCLUDED_CLOSE_REASONS),
+            "blocking_reasons": blocking_reasons,
+            "assumption": "position_manager_closes_with_a_countable_close_reason",
+        }
 
     def _codex_invocation_delta(self, before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
         before_codex = before.get("codex_cli") if isinstance(before.get("codex_cli"), dict) else {}

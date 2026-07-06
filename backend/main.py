@@ -741,7 +741,7 @@ async def api_positions():
     await position_manager.manage_all()
     return {
         "summary": position_manager.summary(),
-        "open": [p.asdict() for p in position_registry.list_open()],
+        "open": [_open_position_table_view(p) for p in position_registry.list_open()],
         "closed": [_closed_position_table_view(row) for row in position_registry.list_closed(limit=100)],
     }
 
@@ -1446,6 +1446,18 @@ def _closed_position_table_view(row: dict[str, Any]) -> dict[str, Any]:
         "source_signal_id",
     )
     return {key: row.get(key) for key in keys}
+
+
+def _open_position_table_view(position) -> dict[str, Any]:
+    row = position.asdict()
+    strategy = strategy_registry.get(position.strategy_id) or {}
+    source = str(strategy.get("source") or "").strip().lower()
+    provider = str(strategy.get("provider") or "").strip().lower()
+    contract = position.strategy_contract if isinstance(position.strategy_contract, dict) else {}
+    contract_provider = str(contract.get("provider") or contract.get("model_provider") or "").strip().lower()
+    if provider == "codex_cli" or source == "ai_generated_codex_cli" or contract_provider == "codex_cli":
+        row["learning_countability"] = ai_trade_director._codex_learning_countability(position, strategy)
+    return row
 
 
 def _compact_ai_strategy_status(status: dict[str, Any]) -> dict[str, Any]:

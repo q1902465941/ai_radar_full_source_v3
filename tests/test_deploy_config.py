@@ -220,6 +220,9 @@ def test_codex_paper_sample_watch_script_tracks_close_without_forcing_exit():
     assert "api/positions" in script
     assert "api/system/readiness" in script
     assert "codex_real_closed_samples_with_radar" in script
+    assert "learning_countability" in script
+    assert "will_count_when_closed" in script
+    assert "blocking_reasons" in script
     assert "OPEN_POSITION_PENDING_CLOSE" in script
     assert "MaxWaitSeconds" in script
     assert "NoFailOnTimeout" in script

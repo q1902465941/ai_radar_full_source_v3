@@ -79,6 +79,23 @@ function Test-PositionStillOpen($Positions, [string]$PositionId) {
     return $false
 }
 
+function Join-Values($Values) {
+    $items = @($Values)
+    if ($items.Count -eq 0) {
+        return "none"
+    }
+    return ($items -join ",")
+}
+
+function Write-LearningCountability($Target) {
+    $countability = $Target.learning_countability
+    Assert-True ($null -ne $countability) "watch refused: learning_countability is unavailable; rerun after backend exposes countability evidence"
+    $blocking = Join-Values $countability.blocking_reasons
+    Write-Host "learning_countability will_count_when_closed=$($countability.will_count_when_closed) radar_snapshot_found=$($countability.radar_snapshot_found) strategy_registered=$($countability.strategy_registered) provider=$($countability.provider) source_signal_id=$($countability.source_signal_id) blocking_reasons=$blocking"
+    Write-Host "countable_close_reasons=$(Join-Values $countability.countable_close_reasons) excluded_close_reasons=$(Join-Values $countability.excluded_close_reasons)"
+    Assert-True ($countability.will_count_when_closed -eq $true) "watch refused: Codex position is not countable when closed; blocking_reasons=$blocking"
+}
+
 $maxWait = [Math]::Max(0, $MaxWaitSeconds)
 $poll = [Math]::Max(1, $PollSeconds)
 
@@ -95,6 +112,7 @@ $pendingClose = $probe.sampling_status -eq "OPEN_POSITION_PENDING_CLOSE"
 
 $positionId = [string]$target.position_id
 Write-Host "watching position_id=$positionId symbol=$($target.symbol) side=$($target.side) sampling_status=$($probe.sampling_status) pending_close=$pendingClose initial_codex_real_closed_samples_with_radar=$initialCodexClosed"
+Write-LearningCountability $target
 
 $deadline = (Get-Date).AddSeconds($maxWait)
 while ($true) {

@@ -7313,6 +7313,7 @@ def test_ai_trade_director_codex_paper_probe_reports_pending_codex_position_when
     pending.last_decision = {"action": "HOLD", "reason": "THESIS_ALIVE", "thesis_alive": True}
     pending.strategy_contract = {"time_stop": {"seconds": 3600}}
     position_registry.open[pending.position_id] = pending
+    db.save_radar_items(pending.source_signal_id, [item.asdict()])
     monkeypatch.setattr(settings, "ai_enabled", True)
     monkeypatch.setattr(settings, "ai_strategy_provider", "codex_cli")
     monkeypatch.setattr(settings, "require_codex_strategy_for_entry", True)
@@ -7370,6 +7371,11 @@ def test_ai_trade_director_codex_paper_probe_reports_pending_codex_position_when
         out = __import__("asyncio").run(ai_trade_director.run_codex_paper_probe())
     finally:
         position_registry.open.pop(pending.position_id, None)
+        with db.conn() as conn:
+            conn.execute(
+                "DELETE FROM radar_snapshots WHERE scan_id=? AND symbol=?",
+                (pending.source_signal_id, pending.symbol),
+            )
 
     assert out["ok"] is True
     assert out["sampling_status"] == "OPEN_POSITION_PENDING_CLOSE"
@@ -7379,6 +7385,14 @@ def test_ai_trade_director_codex_paper_probe_reports_pending_codex_position_when
     assert out["open_positions"][0]["exit_targets"] == {"stop_loss": 99, "tp1": 101.2, "tp2": 102.5}
     assert out["open_positions"][0]["time_stop"]["seconds"] == 3600
     assert out["open_positions"][0]["last_decision"]["reason"] == "THESIS_ALIVE"
+    countability = out["open_positions"][0]["learning_countability"]
+    assert countability["will_count_when_closed"] is True
+    assert countability["radar_snapshot_found"] is True
+    assert countability["strategy_registered"] is True
+    assert countability["provider"] == "codex_cli"
+    assert "MAX_HOLD_TIMEOUT" in countability["countable_close_reasons"]
+    assert "PRICE_SOURCE_STALE_RECONCILE" in countability["excluded_close_reasons"]
+    assert countability["blocking_reasons"] == []
     assert out["next_action"] == "wait_for_position_manager_close_to_create_codex_closed_sample"
 
 
@@ -7391,6 +7405,40 @@ def test_codex_paper_probe_api_delegates_to_trade_director(monkeypatch):
     out = __import__("asyncio").run(main_module.api_trade_director_codex_paper_probe())
 
     assert out == {"ok": True, "mode": "codex_paper_probe", "sampling_status": "NO_OPEN"}
+
+
+def test_positions_api_exposes_codex_learning_countability(monkeypatch):
+    position_registry.open.clear()
+    item = high_quality_item(symbol="CODEXPOSAPIUSDT", side="LONG", price=100)
+    position = feedback_position("codex_position_api_strategy", item.symbol, "pos_codex_position_api")
+    db.save_radar_items(position.source_signal_id, [item.asdict()])
+    position_registry.open[position.position_id] = position
+    monkeypatch.setattr(
+        strategy_registry,
+        "get",
+        lambda strategy_id: {"strategy_id": strategy_id, "provider": "codex_cli", "source": "ai_generated_codex_cli"},
+    )
+
+    async def noop_manage_all():
+        return None
+
+    monkeypatch.setattr(position_manager, "manage_all", noop_manage_all)
+
+    try:
+        out = __import__("asyncio").run(main_module.api_positions())
+    finally:
+        position_registry.open.pop(position.position_id, None)
+        with db.conn() as conn:
+            conn.execute(
+                "DELETE FROM radar_snapshots WHERE scan_id=? AND symbol=?",
+                (position.source_signal_id, position.symbol),
+            )
+
+    row = out["open"][0]
+    assert row["position_id"] == position.position_id
+    assert row["learning_countability"]["will_count_when_closed"] is True
+    assert row["learning_countability"]["radar_snapshot_found"] is True
+    assert row["learning_countability"]["provider"] == "codex_cli"
 
 
 def test_trade_acceptance_runner_verifies_real_paper_cycle(monkeypatch):

@@ -43,6 +43,24 @@ function priceStatus(p) {
   return `<small>${stale} ${source} ${fmt(age, 1)}s</small>${bidAsk}${error}`;
 }
 
+function compactList(values) {
+  const items = Array.isArray(values) ? values.filter(Boolean) : [];
+  return items.length ? items.join(',') : 'none';
+}
+
+function codexCountabilityText(p) {
+  const c = p.learning_countability;
+  if (!c) return '--';
+  const ok = c.will_count_when_closed === true;
+  const blocking = compactList(c.blocking_reasons);
+  const title = `countable_close_reasons=${compactList(c.countable_close_reasons)} / excluded_close_reasons=${compactList(c.excluded_close_reasons)}`;
+  return `
+    <span class="badge ${ok ? 'green' : 'red'}" title="${escapeHtml(title)}">${ok ? 'COUNTABLE' : 'BLOCKED'}</span>
+    <br><small>radar ${c.radar_snapshot_found ? 'YES' : 'NO'} / ${escapeHtml(c.provider || '--')}</small>
+    <br><small>${escapeHtml(blocking)}</small>
+  `;
+}
+
 async function j(url, opts) {
   const nextOpts = opts || {};
   const headers = new Headers(nextOpts.headers || {});
@@ -879,7 +897,7 @@ async function refreshPositions() {
   if (openBody) {
     const openRows = data.open || [];
     if (!openRows.length) {
-      openBody.innerHTML = '<tr><td colspan="18" class="muted">当前没有未平仓持仓；下方列表是历史已平仓记录，不代表现在还在持仓。</td></tr>';
+      openBody.innerHTML = '<tr><td colspan="19" class="muted">当前没有未平仓持仓；下方列表是历史已平仓记录，不代表现在还在持仓。</td></tr>';
     } else {
       openBody.innerHTML = openRows.map((p) => {
       const notional = Number(p.notional || 0) || Number(p.entry_price || 0) * Number(p.initial_quantity || p.quantity || 0);
@@ -894,7 +912,7 @@ async function refreshPositions() {
           <td>${fmt(p.stop_loss, 5)}<br><small>${p.lock_status || '--'}</small></td>
           <td>${fmt(p.tp1, 5)}</td><td>${fmt(p.tp2, 5)}</td><td>${fmt(p.current_price, 5)}<br>${priceStatus(p)}</td>
           <td class="${cls(p.unrealized_pnl)}">${fmt(p.unrealized_pnl, 3)}</td><td class="${cls(p.roi)}">${fmt(p.roi, 2)}%</td>
-          <td>${ts(p.open_time)}</td><td><button class="btn danger" type="button" data-confirm="manual-close-position" data-busy-label="平仓中..." onclick="manualClose('${p.position_id}', event)">手动平仓</button></td>
+          <td>${ts(p.open_time)}</td><td>${codexCountabilityText(p)}</td><td><button class="btn danger" type="button" data-confirm="manual-close-position" data-busy-label="平仓中..." onclick="manualClose('${p.position_id}', event)">手动平仓</button></td>
         </tr>`;
       }).join('');
     }
