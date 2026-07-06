@@ -12,7 +12,28 @@ x-ai-radar-runtime-env: &ai-radar-runtime-env
   AI_ENABLED: ${AI_ENABLED:-false}
   AI_STRATEGY_PROVIDER: ${AI_STRATEGY_PROVIDER:-rule}
   REQUIRE_CODEX_STRATEGY_FOR_ENTRY: ${REQUIRE_CODEX_STRATEGY_FOR_ENTRY:-false}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
+  CODEX_HOME: /root/.codex
   CODEX_COMMAND: ${DOCKER_CODEX_COMMAND:-codex}
+  CODEX_MODEL: ${CODEX_MODEL:-}
+  CODEX_MODEL_PROVIDER: ${CODEX_MODEL_PROVIDER:-}
+  CODEX_PROVIDER_NAME: ${CODEX_PROVIDER_NAME:-ChatGPT HTTP}
+  CODEX_PROVIDER_REQUIRES_OPENAI_AUTH: ${CODEX_PROVIDER_REQUIRES_OPENAI_AUTH:-true}
+  CODEX_PROVIDER_SUPPORTS_WEBSOCKETS: ${CODEX_PROVIDER_SUPPORTS_WEBSOCKETS:-false}
+  CODEX_TIMEOUT_SECONDS: ${CODEX_TIMEOUT_SECONDS:-90}
+  CODEX_REASONING_EFFORT: ${CODEX_REASONING_EFFORT:-medium}
+  CODEX_SERVICE_TIER: ${CODEX_SERVICE_TIER:-fast}
+  CODEX_FAST_MODEL: ${CODEX_FAST_MODEL:-}
+  CODEX_FAST_REASONING_EFFORT: ${CODEX_FAST_REASONING_EFFORT:-medium}
+  CODEX_FAST_TIMEOUT_SECONDS: ${CODEX_FAST_TIMEOUT_SECONDS:-90}
+  CODEX_FAST_SERVICE_TIER: ${CODEX_FAST_SERVICE_TIER:-}
+  CODEX_QA_MODEL: ${CODEX_QA_MODEL:-}
+  CODEX_QA_REASONING_EFFORT: ${CODEX_QA_REASONING_EFFORT:-low}
+  CODEX_QA_TIMEOUT_SECONDS: ${CODEX_QA_TIMEOUT_SECONDS:-60}
+  CODEX_EVOLVE_MODEL: ${CODEX_EVOLVE_MODEL:-}
+  CODEX_EVOLVE_REASONING_EFFORT: ${CODEX_EVOLVE_REASONING_EFFORT:-medium}
+  CODEX_EVOLVE_TIMEOUT_SECONDS: ${CODEX_EVOLVE_TIMEOUT_SECONDS:-120}
   BINANCE_TESTNET: ${BINANCE_TESTNET:-false}
   BINANCE_API_KEY: ${BINANCE_API_KEY:-}
   BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
@@ -49,6 +70,8 @@ services:
       dockerfile: Dockerfile.backend
       args:
         PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+        INSTALL_CODEX_CLI: ${INSTALL_CODEX_CLI:-true}
+        CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.130.0}
     command:
       - sh
       - -c
@@ -62,6 +85,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+      - ${DOCKER_CODEX_HOME:-./.codex-docker}:/root/.codex
     healthcheck:
       test:
         [
@@ -80,6 +104,8 @@ services:
       dockerfile: Dockerfile.backend
       args:
         PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+        INSTALL_CODEX_CLI: ${INSTALL_CODEX_CLI:-true}
+        CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.130.0}
     command:
       - sh
       - -c
@@ -93,6 +119,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+      - ${DOCKER_CODEX_HOME:-./.codex-docker}:/root/.codex
     depends_on:
       backend:
         condition: service_healthy

@@ -131,15 +131,24 @@ REQUIRE_CODEX_STRATEGY_FOR_ENTRY=true
 
 Use `CODEX_COMMAND` for local host runs. Docker Compose maps
 `DOCKER_CODEX_COMMAND` into the container as `CODEX_COMMAND` so a Windows host
-path cannot leak into the Linux backend. The container must include the Codex
-CLI, otherwise `/api/system/readiness`, `/api/autotrade/diagnostics`, and the
-monitor cards report `availability_reason=codex_command_missing`, and strategy
-generation waits instead of opening a rule fallback trade.
+path cannot leak into the Linux backend. The backend image installs
+`@openai/codex` by default with `INSTALL_CODEX_CLI=true` and
+`CODEX_CLI_VERSION=0.130.0`.
+
+Docker Codex auth must be present inside `CODEX_HOME=/root/.codex`. Compose
+mounts `${DOCKER_CODEX_HOME:-./.codex-docker}` there as a writable directory,
+because Codex writes runtime state even during non-interactive `exec`. Either
+provide `OPENAI_API_KEY` or set `DOCKER_CODEX_HOME` to a logged-in host Codex
+home, for example `C:/Users/Administrator/.codex` on this machine. Missing CLI
+reports `availability_reason=codex_command_missing`; missing auth reports
+`availability_reason=codex_auth_missing`. Strategy generation waits instead of
+opening a rule fallback trade.
 
 Persistent mounts:
 
 - `./data:/app/data`
 - `./logs:/app/logs`
+- `${DOCKER_CODEX_HOME:-./.codex-docker}:/root/.codex`
 
 The backend, api-v2, and frontend services define health checks. The frontend
 waits for both backend services to become healthy before starting.

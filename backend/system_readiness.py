@@ -225,14 +225,15 @@ def wait_blockers_for(
                 "This is normal only when there is no candidate or capacity is full.",
             )
         )
-    if _codex_required() and not codex.get("command_found"):
+    if _codex_required() and not _codex_generation_ready(codex):
+        reason = _codex_unavailable_reason(codex)
         blockers.append(
             _block(
-                "codex_command_missing",
+                reason,
                 "BLOCK_PAPER_ENTRY",
                 "codex",
-                "Codex is required for entry but the Codex command is not available.",
-                "Install/fix Codex CLI or disable the Codex-required gate only for controlled paper tests.",
+                f"Codex is required for entry but is not generation-ready: {reason}.",
+                "Install/fix Codex CLI, mount Codex auth, provide OPENAI_API_KEY, or disable the Codex-required gate only for controlled paper tests.",
             )
         )
     cooldowns = candidate_filter.get("ai_wait_cooldowns") if isinstance(candidate_filter.get("ai_wait_cooldowns"), dict) else {}
@@ -274,8 +275,9 @@ def paper_learning_status(
         blockers.append(_block("paper_loop_guard_blocked", "BLOCK_PAPER_ENTRY", "paper_learning", f"Paper loop guard is blocking: {loop_reason or 'unknown'}", "Fix loop guard settings first."))
     if not candidate_symbols and _safe_int(counts.get("paper_probe_candidates")) <= 0:
         blockers.append(_block("paper_candidate_empty", "WAIT", "paper_learning", "Paper loop has no candidate to sample.", "Keep scanning; do not open random symbols just to create samples."))
-    if _codex_required() and not codex.get("command_found"):
-        blockers.append(_block("codex_required_for_paper_entry", "BLOCK_PAPER_ENTRY", "paper_learning", "Codex-required entry cannot open paper samples until Codex is available.", "Fix Codex or run a deliberate paper-only rule fallback test."))
+    if _codex_required() and not _codex_generation_ready(codex):
+        reason = _codex_unavailable_reason(codex)
+        blockers.append(_block("codex_required_for_paper_entry", "BLOCK_PAPER_ENTRY", "paper_learning", f"Codex-required entry cannot open paper samples until Codex is generation-ready: {reason}.", "Fix Codex CLI/auth or run a deliberate paper-only rule fallback test."))
     if bool(performance.get("recovery_mode")):
         blockers.append(_block("performance_recovery_mode", "WARN", "paper_learning", "Performance guard is in recovery mode.", "Paper can still sample, but live graduation stays blocked."))
     if not bool(data_quality.get("production_grade")):
@@ -419,13 +421,31 @@ def live_enablement_status(live: dict[str, Any]) -> dict[str, Any]:
 
 def codex_status(ai_status: dict[str, Any]) -> dict[str, Any]:
     codex = ai_status.get("codex_cli") if isinstance(ai_status.get("codex_cli"), dict) else {}
+    provider = str(ai_status.get("provider") or "").strip().lower()
+    ready_for_generation = _codex_generation_ready(codex)
+    codex_will_invoke = bool(
+        provider == "codex_cli"
+        and ai_status.get("will_invoke_for_current_candidates")
+        and ready_for_generation
+    )
+    if provider != "codex_cli":
+        not_invoked_reason = f"provider_{provider or 'unknown'}_not_codex"
+    elif not ready_for_generation:
+        not_invoked_reason = _codex_unavailable_reason(codex)
+    else:
+        not_invoked_reason = ai_status.get("not_invoked_reason")
     return {
         "required_for_entry": _codex_required(),
         "ai_enabled": bool(ai_status.get("enabled")),
         "provider": ai_status.get("provider"),
         "command_found": bool(codex.get("command_found")),
-        "ready_for_generation": bool(codex.get("ready_for_generation")),
+        "ready_for_generation": ready_for_generation,
         "availability_reason": codex.get("availability_reason"),
+        "auth_required": codex.get("auth_required"),
+        "auth_available": codex.get("auth_available"),
+        "auth_source": codex.get("auth_source"),
+        "codex_home": codex.get("codex_home"),
+        "auth_json_exists": codex.get("auth_json_exists"),
         "model": codex.get("model"),
         "timeout_seconds": codex.get("timeout_seconds"),
         "reasoning_effort": codex.get("reasoning_effort"),
@@ -436,9 +456,24 @@ def codex_status(ai_status: dict[str, Any]) -> dict[str, Any]:
         "last_error": codex.get("last_error"),
         "last_symbol": codex.get("last_symbol"),
         "last_action": codex.get("last_action"),
-        "will_invoke_for_current_candidates": bool(ai_status.get("will_invoke_for_current_candidates")),
-        "not_invoked_reason": ai_status.get("not_invoked_reason"),
+        "will_invoke_for_current_candidates": codex_will_invoke,
+        "not_invoked_reason": not_invoked_reason,
     }
+
+
+def _codex_generation_ready(codex: dict[str, Any]) -> bool:
+    if "ready_for_generation" in codex:
+        return bool(codex.get("ready_for_generation"))
+    return bool(codex.get("command_found"))
+
+
+def _codex_unavailable_reason(codex: dict[str, Any]) -> str:
+    reason = str(codex.get("availability_reason") or "").strip()
+    if reason:
+        return reason
+    if not codex.get("command_found"):
+        return "codex_command_missing"
+    return "codex_unavailable"
 
 
 def websocket_status() -> dict[str, Any]:
@@ -518,8 +553,8 @@ def next_actions(
         actions.append("First stabilize the market feed: run scan, check REST/WS errors, and confirm snapshot_count is above 0.")
     if {"candidate_filter_empty", "paper_candidate_empty"} & codes:
         actions.append("Then inspect candidate rejection counts; do not reduce the radar universe just to hide weak signals.")
-    if {"codex_command_missing", "codex_required_for_paper_entry"} & codes:
-        actions.append("Fix Codex availability before expecting AI-generated paper entries.")
+    if {"codex_command_missing", "codex_auth_missing", "codex_unavailable", "codex_required_for_paper_entry"} & codes:
+        actions.append("Fix Codex CLI/auth availability before expecting AI-generated paper entries.")
     if paper.get("closed_loop_enabled") and not paper.get("auto_loop_enabled"):
         actions.append("Paper learning loop is configured but auto loop is off; start it only after the readiness blockers make sense.")
     live_actions = live_enablement.get("next_actions") or []

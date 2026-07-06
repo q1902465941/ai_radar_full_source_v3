@@ -31,7 +31,7 @@ and `scripts/stop_local_stack.ps1`.
 
 Evidence from the latest local run:
 
-- Backend tests: `385 passed`
+- Backend tests: `392 passed`
 - Frontend tests: `5 files / 8 tests passed`
 - Frontend production build: passed
 - Backend smoke: `/api/v2/health` returned service `ai-radar-api`
@@ -143,9 +143,9 @@ hardening mainnet market data:
   longer includes `AI Radar Control Center`.
 - Docker landing verification: `scripts/verify_docker_stack.ps1` completed.
 - Latest Docker verification checked 8 radar prices with worst drift
-  `STORJUSDT 0.266%`, checked 80 monitor/active symbols as supported USD-M
+  `DEEPUSDT 0.323%`, checked 81 monitor/active symbols as supported USD-M
   ASCII contracts, matched `10/10` active ticker priority candidates, reported
-  paper graduation `real_closed=0/30 missing=30`, and completed the controlled
+  paper graduation `real_closed=1/30 missing=29`, and completed the controlled
   paper closed loop.
 - Latest browser smoke showed the 24h major-market cards, `Graduation`, the AI
   candidate queue, and the scan evidence matrix with no browser console errors.
@@ -203,20 +203,34 @@ strategies:
 - Codex-generated entries require `AI_ENABLED=true`,
   `AI_STRATEGY_PROVIDER=codex_cli`, and
   `REQUIRE_CODEX_STRATEGY_FOR_ENTRY=true`.
-- Codex CLI readiness is exposed as `ready_for_generation` and
-  `availability_reason` in `/api/system/readiness`,
-  `/api/autotrade/diagnostics`, and the monitor cards.
+- Codex CLI readiness is exposed as `ready_for_generation`,
+  `availability_reason`, `auth_available`, and `auth_source` in
+  `/api/system/readiness`, `/api/autotrade/diagnostics`, and the monitor
+  cards.
 - Docker Compose no longer passes a Windows host `CODEX_COMMAND` into Linux
   containers. It maps `DOCKER_CODEX_COMMAND` to container `CODEX_COMMAND`.
-- The current Docker backend image does not include Codex CLI. Runtime evidence
-  after rebuild shows provider `rule`, Codex `required_for_entry=false`,
-  `ready_for_generation=false`, and
-  `availability_reason=codex_command_missing`. This is now visible and blocks
-  Codex-required entry instead of silently falling back to a rule strategy.
+- The current Docker backend image installs `@openai/codex@0.130.0` by default
+  and exposes `/usr/bin/codex`. Runtime evidence after rebuild with
+  `DOCKER_CODEX_HOME=C:/Users/Administrator/.codex`,
+  `CODEX_MODEL_PROVIDER=chatgpt_http`, and `CODEX_MODEL=gpt-5.5` shows
+  `ready_for_generation=true`, `availability_reason=ok`,
+  `auth_source=codex_home_auth_json`, and `schema_exists=true`.
+- `CODEX_HOME` must be writable. A read-only Codex home caused
+  `failed to initialize in-process app-server client: Read-only file system`;
+  Compose now mounts `${DOCKER_CODEX_HOME:-./.codex-docker}:/root/.codex`
+  without `:ro`.
+- A controlled one-off Docker smoke test called
+  `CodexCLIStrategyClient.generate()` on a paper-only candidate and returned
+  `action=OPEN_LONG`, `provider=codex_cli`, `fallback_reason=null`, and
+  `has_contract=true`. This verifies real Codex strategy generation in the
+  container; automatic entries still require enabling the three Codex env flags
+  explicitly.
 - Strategy quality feedback now emits a structured
   `ai_strategy_quality_feedback.candidate_feedback.generation_gate`. If
   `allow_open_plan=false`, the Codex prompt requires WAIT and includes the gate
-  reasons in `upgrade_condition`. Hard avoid-repeat buckets from losing
+  reasons in `upgrade_condition`. The Codex client also enforces this locally:
+  even if the model returns OPEN, `allow_open_plan=false` is converted to
+  `WAIT_FOR_STRATEGY_QUALITY_GATE`. Hard avoid-repeat buckets from losing
   AI-generated strategies therefore become a test-covered strategy-generation
   gate, before the downstream risk model and live readiness gates.
 
@@ -245,7 +259,7 @@ Evidence from 2026-07-06:
 - Paper loop guard: `ok=true`, reason `paper_closed_loop_sampling`.
 - Codex-related wait/paper-entry blockers: none.
 - Paper graduation progress is visible in readiness. Current mounted Docker DB
-  evidence after the latest rebuild showed `real_closed=0/30`, `missing=30`,
+  evidence after the latest rebuild showed `real_closed=1/30`, `missing=29`,
   and trust `LOW`, so the paper/shadow loop is usable while live graduation
   remains blocked.
 - Paper-top sampling now cools down rejected candidates, releases the candidate

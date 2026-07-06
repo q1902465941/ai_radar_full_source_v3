@@ -113,11 +113,19 @@ REQUIRE_CODEX_STRATEGY_FOR_ENTRY=true
 ```
 
 For local Windows runs, `CODEX_COMMAND=codex` uses the host Codex CLI. Docker
-uses `DOCKER_CODEX_COMMAND` and does not inherit a host Windows executable path;
-the backend image must actually contain a runnable Codex CLI for the monitor to
-show `Codex READY`. If it is missing, readiness reports
-`availability_reason=codex_command_missing` and strategy generation returns
-WAIT instead of silently falling back to rule entries.
+uses `DOCKER_CODEX_COMMAND` and does not inherit a host Windows executable path.
+The backend image installs `@openai/codex` by default with
+`INSTALL_CODEX_CLI=true` and `CODEX_CLI_VERSION=0.130.0`.
+
+Docker Codex auth is explicit. Compose sets `CODEX_HOME=/root/.codex` and
+mounts `${DOCKER_CODEX_HOME:-./.codex-docker}` there as a writable directory,
+because Codex writes runtime state even for non-interactive `exec`. Use
+`OPENAI_API_KEY` for API-key auth, or set `DOCKER_CODEX_HOME` to an already
+logged-in host Codex home such as `C:/Users/Administrator/.codex`.
+
+Readiness reports `availability_reason=codex_command_missing` when the CLI is
+missing and `availability_reason=codex_auth_missing` when auth is missing.
+Generation waits instead of silently falling back to rule entries.
 
 ## Safety Defaults
 

@@ -195,6 +195,9 @@ class CodexCLIStrategyClient:
                 self.last_repair_reason = str(exc)
                 repair_raw = await asyncio.to_thread(self._repair_codex_plan, data, item, context, runtime, str(exc))
                 plan = self._plan_from_dict(json.loads(repair_raw), item, runtime)
+            generation_gate = generation_gate_from_context(context)
+            if plan.action != "WAIT" and generation_gate_blocks_open(generation_gate):
+                return self._generation_gate_wait(item, generation_gate, runtime)
         except json.JSONDecodeError:
             self.last_status = "fallback_wait"
             self.last_error = "codex_invalid_json"
@@ -391,6 +394,48 @@ class CodexCLIStrategyClient:
         )
         return self._record_plan(item, plan, "fallback_wait", reason, runtime)
 
+    def _generation_gate_wait(self, item: RadarItem, generation_gate: dict[str, Any], runtime: CodexRuntime) -> StrategyPlan:
+        reasons = [str(reason) for reason in generation_gate.get("reasons") or [] if str(reason)]
+        if not reasons:
+            reasons = ["generation_gate_blocked"]
+        upgrade_condition = {
+            "generation_gate_reasons": reasons,
+            "instruction": generation_gate.get("instruction")
+            or "Wait until local strategy quality feedback allows OPEN plans.",
+        }
+        reason = f"generation_gate_blocked:{','.join(reasons[:6])}"
+        plan = StrategyPlan(
+            strategy_id=new_id("codex_quality_wait"),
+            action="WAIT",
+            symbol=item.symbol,
+            side="NEUTRAL",
+            entry_zone_low=item.price,
+            entry_zone_high=item.price,
+            ideal_entry_price=item.price,
+            stop_loss=0,
+            tp1=0,
+            tp2=0,
+            confidence=0,
+            reason="local strategy quality generation gate blocked Codex OPEN",
+            wait_type="WAIT_FOR_STRATEGY_QUALITY_GATE",
+            expire_after_seconds=180,
+            raw={
+                "provider": "codex_cli",
+                "quality_block": "generation_gate",
+                "generation_gate": generation_gate,
+                "upgrade_condition": upgrade_condition,
+                "model": runtime.model,
+                "model_route": runtime.route,
+                "reasoning_effort": runtime.reasoning_effort,
+                "cyqnt_feature_enhancement": candidate_feature_enhancer.evaluate(item).asdict(),
+            },
+        )
+        plan = attach_contract(plan, build_rule_contract(item, plan, paper_probe=False))
+        self.last_status = "quality_wait"
+        self.last_error = reason
+        self.last_action = "WAIT"
+        return self._record_plan(item, plan, "quality_wait", reason, runtime)
+
     def _record_plan(self, item: RadarItem, plan: StrategyPlan, status: str, reason: str, runtime: CodexRuntime | None = None) -> StrategyPlan:
         runtime = runtime or codex_runtime_for_strategy(None)
         row = {
@@ -429,18 +474,27 @@ class CodexCLIStrategyClient:
         resolved = shutil.which(self.codex_command) or ""
         command_found = bool(resolved)
         schema_exists = self.schema_path.exists()
+        auth = codex_auth_status()
         if not command_found:
             availability_reason = "codex_command_missing"
         elif not schema_exists:
             availability_reason = "strategy_schema_missing"
+        elif not auth["auth_available"]:
+            availability_reason = "codex_auth_missing"
         else:
             availability_reason = "ok"
+        ready_for_generation = bool(command_found and schema_exists and auth["auth_available"])
         return {
             "configured_command": self.codex_command,
             "resolved_command": resolved or self.codex_command,
             "command_found": command_found,
-            "ready_for_generation": bool(command_found and schema_exists),
+            "ready_for_generation": ready_for_generation,
             "availability_reason": availability_reason,
+            "auth_required": auth["auth_required"],
+            "auth_available": auth["auth_available"],
+            "auth_source": auth["auth_source"],
+            "codex_home": auth["codex_home"],
+            "auth_json_exists": auth["auth_json_exists"],
             "model_provider": normalized_codex_model_provider() or "openai",
             "provider_name": settings.codex_provider_name,
             "provider_requires_openai_auth": bool(settings.codex_provider_requires_openai_auth),
@@ -561,6 +615,64 @@ def normalized_codex_service_tier() -> str:
 def normalized_codex_model_provider() -> str:
     provider = str(settings.codex_model_provider or "").strip()
     return provider if re.fullmatch(r"[A-Za-z0-9_]+", provider) else ""
+
+
+def generation_gate_from_context(context: dict[str, Any]) -> dict[str, Any]:
+    feedback = context.get("ai_strategy_quality_feedback") if isinstance(context.get("ai_strategy_quality_feedback"), dict) else {}
+    candidate = feedback.get("candidate_feedback") if isinstance(feedback.get("candidate_feedback"), dict) else {}
+    gate = candidate.get("generation_gate") if isinstance(candidate.get("generation_gate"), dict) else {}
+    if gate:
+        return gate
+    position_context = context.get("position_context") if isinstance(context.get("position_context"), dict) else {}
+    nested_feedback = (
+        position_context.get("ai_strategy_quality_feedback")
+        if isinstance(position_context.get("ai_strategy_quality_feedback"), dict)
+        else {}
+    )
+    nested_candidate = (
+        nested_feedback.get("candidate_feedback")
+        if isinstance(nested_feedback.get("candidate_feedback"), dict)
+        else {}
+    )
+    nested_gate = nested_candidate.get("generation_gate") if isinstance(nested_candidate.get("generation_gate"), dict) else {}
+    return nested_gate
+
+
+def generation_gate_blocks_open(generation_gate: dict[str, Any]) -> bool:
+    return isinstance(generation_gate, dict) and generation_gate.get("allow_open_plan") is False
+
+
+def codex_auth_status() -> dict[str, Any]:
+    provider = normalized_codex_model_provider() or "openai"
+    auth_required = bool(settings.codex_provider_requires_openai_auth or provider == "openai")
+    api_key_present = bool(str(os.environ.get("OPENAI_API_KEY") or settings.openai_api_key or "").strip())
+    codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")).expanduser()
+    auth_json = codex_home / "auth.json"
+    try:
+        auth_json_exists = auth_json.is_file() and auth_json.stat().st_size > 2
+    except OSError:
+        auth_json_exists = False
+    if not auth_required:
+        return {
+            "auth_required": False,
+            "auth_available": True,
+            "auth_source": "not_required",
+            "codex_home": str(codex_home),
+            "auth_json_exists": auth_json_exists,
+        }
+    if api_key_present:
+        auth_source = "openai_api_key"
+    elif auth_json_exists:
+        auth_source = "codex_home_auth_json"
+    else:
+        auth_source = ""
+    return {
+        "auth_required": True,
+        "auth_available": bool(auth_source),
+        "auth_source": auth_source,
+        "codex_home": str(codex_home),
+        "auth_json_exists": auth_json_exists,
+    }
 
 
 def _toml_string(value: str) -> str:

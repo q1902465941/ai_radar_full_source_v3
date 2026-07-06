@@ -484,6 +484,47 @@ def test_codex_cli_status_reports_generation_unavailable_when_command_missing(mo
     assert status["ready_for_generation"] is False
     assert status["availability_reason"] == "codex_command_missing"
 
+
+def test_codex_cli_status_requires_auth_when_command_and_schema_exist(monkeypatch, tmp_path):
+    schema = tmp_path / "strategy_plan.schema.json"
+    schema.write_text("{}", encoding="utf-8")
+    codex_home = tmp_path / "empty-codex-home"
+    codex_home.mkdir()
+    monkeypatch.setattr("backend.ai_strategy.codex_cli_strategy_client.shutil.which", lambda _command: "/usr/bin/codex")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    client = CodexCLIStrategyClient(codex_command="codex", schema_path=schema)
+    status = client.status()
+
+    assert status["command_found"] is True
+    assert status["schema_exists"] is True
+    assert status["auth_required"] is True
+    assert status["auth_available"] is False
+    assert status["auth_source"] == ""
+    assert status["ready_for_generation"] is False
+    assert status["availability_reason"] == "codex_auth_missing"
+
+
+def test_codex_cli_status_accepts_codex_home_auth_json(monkeypatch, tmp_path):
+    schema = tmp_path / "strategy_plan.schema.json"
+    schema.write_text("{}", encoding="utf-8")
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "auth.json").write_text('{"tokens":"present"}', encoding="utf-8")
+    monkeypatch.setattr("backend.ai_strategy.codex_cli_strategy_client.shutil.which", lambda _command: "/usr/bin/codex")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    client = CodexCLIStrategyClient(codex_command="codex", schema_path=schema)
+    status = client.status()
+
+    assert status["auth_available"] is True
+    assert status["auth_source"] == "codex_home_auth_json"
+    assert status["ready_for_generation"] is True
+    assert status["availability_reason"] == "ok"
+
+
 def test_ai_strategy_status_does_not_claim_codex_invocation_when_command_missing(monkeypatch):
     import backend.ai_strategy.openai_strategy_client as strategy_client_module
 
@@ -604,6 +645,72 @@ def test_codex_open_contract_repair_uses_codex_second_pass(monkeypatch):
     status = client.status()
     assert status["last_repair_attempted"] is True
     assert "codex_open_missing_valid_strategy_contract" in status["last_repair_reason"]
+
+
+def test_codex_generation_gate_locally_blocks_open_even_if_model_ignores_it(monkeypatch):
+    item = high_quality_item(symbol="GATEBLOCKUSDT", side="LONG", price=100)
+    draft_plan = StrategyPlan(
+        strategy_id="model_ignored_gate",
+        action="OPEN_LONG",
+        symbol=item.symbol,
+        side="LONG",
+        entry_zone_low=99.8,
+        entry_zone_high=100.2,
+        ideal_entry_price=100,
+        stop_loss=98,
+        tp1=101.2,
+        tp2=103,
+        confidence=78,
+        reason="model ignored generation gate",
+        wait_type="",
+        expire_after_seconds=180,
+        raw={"provider": "codex_cli"},
+    )
+    payload = {
+        "action": "OPEN_LONG",
+        "symbol": item.symbol,
+        "side": "LONG",
+        "entry_zone_low": 99.8,
+        "entry_zone_high": 100.2,
+        "ideal_entry_price": 100,
+        "stop_loss": 98,
+        "tp1": 101.2,
+        "tp2": 103,
+        "confidence": 78,
+        "reason": "model ignored generation gate",
+        "wait_type": "",
+        "expire_after_seconds": 180,
+        "upgrade_condition": {},
+        "strategy_contract": build_rule_contract(item, draft_plan),
+    }
+    monkeypatch.setattr(
+        "backend.ai_strategy.context_compressor.ai_strategy_feedback.compact_context",
+        lambda _item: {
+            "candidate_feedback": {
+                "generation_gate": {
+                    "allow_open_plan": False,
+                    "reasons": ["avoid_repeating", "hard_failure_risk:market_stale"],
+                    "instruction": "If allow_open_plan is false, Codex must return WAIT.",
+                }
+            }
+        },
+    )
+    runner = FakeRunner(payload)
+    client = CodexCLIStrategyClient(runner=runner, codex_command="codex")
+
+    plan = __import__("asyncio").run(client.generate(item))
+
+    assert plan.action == "WAIT"
+    assert plan.wait_type == "WAIT_FOR_STRATEGY_QUALITY_GATE"
+    assert plan.raw["provider"] == "codex_cli"
+    assert plan.raw["generation_gate"]["allow_open_plan"] is False
+    assert plan.raw["generation_gate"]["reasons"] == ["avoid_repeating", "hard_failure_risk:market_stale"]
+    assert plan.raw["upgrade_condition"]["generation_gate_reasons"] == [
+        "avoid_repeating",
+        "hard_failure_risk:market_stale",
+    ]
+    assert client.status()["last_status"] == "quality_wait"
+
 
 def test_codex_prompt_includes_strategy_geometry_sample(monkeypatch):
     monkeypatch.setattr(settings, "codex_model", "gpt-5.5")
@@ -5452,6 +5559,47 @@ def test_system_readiness_report_marks_codex_wait_and_paper_closed_loop(monkeypa
     assert any(blocker["code"] == "codex_command_missing" for blocker in report["blockers"])
 
 
+def test_system_readiness_blocks_codex_required_entry_when_auth_missing(monkeypatch):
+    import backend.system_readiness as system_readiness
+
+    item = high_quality_item(symbol="AUTHWAITUSDT", side="LONG", price=100)
+    monkeypatch.setattr(radar_engine, "top50", [item])
+    monkeypatch.setattr(settings, "ai_enabled", True)
+    monkeypatch.setattr(settings, "ai_strategy_provider", "codex_cli")
+    monkeypatch.setattr(settings, "require_codex_strategy_for_entry", True)
+    monkeypatch.setattr(settings, "paper_probe_enabled", True)
+    monkeypatch.setattr(settings, "auto_trading_candidate_mode", "paper_top")
+    monkeypatch.setattr(settings, "auto_trading_candidate_min_score", 55.0)
+    monkeypatch.setattr(
+        system_readiness.ai_service,
+        "status",
+        lambda **_kwargs: {
+            "enabled": True,
+            "provider": "codex_cli",
+            "candidate_count_before_ai": 1,
+            "will_invoke_for_current_candidates": False,
+            "not_invoked_reason": "codex_auth_missing",
+            "codex_cli": {
+                "command_found": True,
+                "ready_for_generation": False,
+                "availability_reason": "codex_auth_missing",
+                "auth_available": False,
+                "auth_required": True,
+                "last_status": "never_invoked",
+                "last_error": "",
+            },
+        },
+    )
+
+    report = system_readiness.system_readiness_report()
+
+    assert report["codex"]["command_found"] is True
+    assert report["codex"]["ready_for_generation"] is False
+    assert report["codex"]["availability_reason"] == "codex_auth_missing"
+    assert any(blocker["code"] == "codex_auth_missing" for blocker in report["wait"]["blockers"])
+    assert any(blocker["code"] == "codex_required_for_paper_entry" for blocker in report["paper_learning"]["blockers"])
+
+
 def test_compact_ai_strategy_status_exposes_codex_generation_readiness():
     status = main_module._compact_ai_strategy_status(
         {
@@ -5474,6 +5622,31 @@ def test_compact_ai_strategy_status_exposes_codex_generation_readiness():
 
     assert status["codex_cli"]["ready_for_generation"] is False
     assert status["codex_cli"]["availability_reason"] == "codex_command_missing"
+
+
+def test_system_readiness_codex_status_does_not_reuse_rule_invocation_flag(monkeypatch):
+    import backend.system_readiness as system_readiness
+
+    monkeypatch.setattr(settings, "ai_strategy_provider", "rule")
+    monkeypatch.setattr(settings, "require_codex_strategy_for_entry", False)
+
+    status = system_readiness.codex_status(
+        {
+            "enabled": False,
+            "provider": "rule",
+            "will_invoke_for_current_candidates": True,
+            "not_invoked_reason": "",
+            "codex_cli": {
+                "command_found": False,
+                "ready_for_generation": False,
+                "availability_reason": "codex_command_missing",
+            },
+        }
+    )
+
+    assert status["provider"] == "rule"
+    assert status["will_invoke_for_current_candidates"] is False
+    assert status["not_invoked_reason"] == "provider_rule_not_codex"
 
 
 def test_system_readiness_exposes_paper_graduation_progress(monkeypatch):

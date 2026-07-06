@@ -50,8 +50,25 @@ def test_docker_compose_passes_mainnet_market_runtime_env_to_backend_services():
     assert "MONITOR_LEGACY_DB_FALLBACK_ENABLED: ${MONITOR_LEGACY_DB_FALLBACK_ENABLED:-true}" in compose
     assert "AI_STRATEGY_PROVIDER: ${AI_STRATEGY_PROVIDER:-rule}" in compose
     assert "REQUIRE_CODEX_STRATEGY_FOR_ENTRY: ${REQUIRE_CODEX_STRATEGY_FOR_ENTRY:-false}" in compose
+    assert "OPENAI_API_KEY: ${OPENAI_API_KEY:-}" in compose
+    assert "CODEX_HOME: /root/.codex" in compose
     assert "CODEX_COMMAND: ${DOCKER_CODEX_COMMAND:-codex}" in compose
+    assert "CODEX_MODEL: ${CODEX_MODEL:-}" in compose
+    assert "CODEX_MODEL_PROVIDER: ${CODEX_MODEL_PROVIDER:-}" in compose
+    assert "CODEX_PROVIDER_NAME: ${CODEX_PROVIDER_NAME:-ChatGPT HTTP}" in compose
+    assert "CODEX_PROVIDER_REQUIRES_OPENAI_AUTH: ${CODEX_PROVIDER_REQUIRES_OPENAI_AUTH:-true}" in compose
+    assert "CODEX_PROVIDER_SUPPORTS_WEBSOCKETS: ${CODEX_PROVIDER_SUPPORTS_WEBSOCKETS:-false}" in compose
+    assert "CODEX_TIMEOUT_SECONDS: ${CODEX_TIMEOUT_SECONDS:-90}" in compose
+    assert "CODEX_REASONING_EFFORT: ${CODEX_REASONING_EFFORT:-medium}" in compose
+    assert "CODEX_SERVICE_TIER: ${CODEX_SERVICE_TIER:-fast}" in compose
+    assert "CODEX_FAST_MODEL: ${CODEX_FAST_MODEL:-}" in compose
+    assert "CODEX_QA_MODEL: ${CODEX_QA_MODEL:-}" in compose
+    assert "CODEX_EVOLVE_MODEL: ${CODEX_EVOLVE_MODEL:-}" in compose
     assert "CODEX_COMMAND: ${CODEX_COMMAND:-}" not in compose
+    assert "CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.130.0}" in compose
+    assert "INSTALL_CODEX_CLI: ${INSTALL_CODEX_CLI:-true}" in compose
+    assert "${DOCKER_CODEX_HOME:-./.codex-docker}:/root/.codex" in compose
+    assert "${DOCKER_CODEX_HOME:-./.codex-docker}:/root/.codex:ro" not in compose
     assert "DB_PATH: ${DOCKER_DB_PATH:-data/ai_radar.db}" in compose
     assert "DB_PATH: ${DB_PATH:-data/ai_radar.db}" not in compose
 
@@ -89,6 +106,9 @@ def test_env_example_defaults_to_mainnet_public_market_data():
     assert "REQUIRE_CODEX_STRATEGY_FOR_ENTRY=false" in env_example
     assert "CODEX_COMMAND=codex" in env_example
     assert "DOCKER_CODEX_COMMAND=codex" in env_example
+    assert "INSTALL_CODEX_CLI=true" in env_example
+    assert "CODEX_CLI_VERSION=0.130.0" in env_example
+    assert "DOCKER_CODEX_HOME=.codex-docker" in env_example
     assert "DOCKER_DB_PATH=data/ai_radar.db" in env_example
     assert "MONITOR_LEGACY_BACKEND_URL=" in env_example
     assert "MONITOR_LEGACY_BACKEND_URL=http://backend:8001" not in env_example
@@ -131,12 +151,29 @@ def test_dockerignore_preserves_data_artifacts_for_backend_image():
     assert "data/*.sqlite3" in dockerignore
 
 
+def test_gitignore_excludes_local_codex_mount_directory():
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+
+    assert ".codex-docker/" in gitignore
+
+
 def test_backend_dockerfile_uses_production_web_server():
     dockerfile = (ROOT / "Dockerfile.backend").read_text(encoding="utf-8")
 
     assert "ARG PYTHON_IMAGE=python:3.12-slim" in dockerfile
     assert "gunicorn" in dockerfile
     assert "uvicorn.workers.UvicornWorker" in dockerfile
+
+
+def test_backend_dockerfile_installs_codex_cli_for_strategy_generation():
+    dockerfile = (ROOT / "Dockerfile.backend").read_text(encoding="utf-8")
+
+    assert "ARG INSTALL_CODEX_CLI=true" in dockerfile
+    assert "ARG CODEX_CLI_VERSION=0.130.0" in dockerfile
+    assert "Acquire::Retries=5" in dockerfile
+    assert "https://deb.nodesource.com/node_24.x" in dockerfile
+    assert 'npm install -g "@openai/codex@${CODEX_CLI_VERSION}"' in dockerfile
+    assert "codex --version" in dockerfile
 
 
 def test_frontend_dockerfile_allows_base_image_overrides():

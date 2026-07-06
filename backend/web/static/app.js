@@ -755,8 +755,9 @@ function graduationSummary(progress) {
 function codexGenerationSummary(codex) {
   const c = codex || {};
   const state = c.ready_for_generation ? 'READY' : 'BLOCKED';
+  const auth = c.auth_required ? (c.auth_source || 'auth_missing') : 'auth_not_required';
   const reason = c.ready_for_generation
-    ? (c.last_status || 'idle')
+    ? `${c.last_status || 'idle'} / ${auth}`
     : (c.availability_reason || c.last_error || (c.command_found ? 'not_ready' : 'codex_command_missing'));
   return `${state} / ${reason}`;
 }

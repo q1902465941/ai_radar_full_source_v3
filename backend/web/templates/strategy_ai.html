@@ -77,6 +77,7 @@ function renderRealtimeStrategyPlans(out) {
     summaryEl.innerHTML = [
       ['provider', out.provider || '--'],
       ['codex ready', codexStatus.ready_for_generation ? 'READY' : `BLOCKED: ${codexStatus.availability_reason || '--'}`],
+      ['codex auth', codexStatus.auth_required ? (codexStatus.auth_source || 'missing') : 'not required'],
       ['candidates', (out.candidate_symbols || []).join(', ') || '--'],
       ['last symbol', plan.symbol || providerStatus.last_symbol || '--'],
       ['action', plan.action || providerStatus.last_action || '--'],

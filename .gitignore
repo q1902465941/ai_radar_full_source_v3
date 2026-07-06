@@ -9,11 +9,15 @@ frontend/dist/
 .env
 .env.*
 !.env.example
+.codex-docker/
 *.log
 logs/
 tmp_ui_review/
 tmp_*
 *.db
+*.db-journal
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 *.tsbuildinfo
