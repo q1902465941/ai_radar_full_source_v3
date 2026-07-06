@@ -1325,6 +1325,10 @@ async def api_trade_director_status():
             scan_error = f"{type(exc).__name__}:{exc}"
     return {**ai_trade_director.status(), "ok": not bool(scan_error), "scan_error": scan_error}
 
+@app.post("/api/trade-director/codex-paper-probe")
+async def api_trade_director_codex_paper_probe():
+    return await ai_trade_director.run_codex_paper_probe()
+
 @app.post("/api/trade-director/acceptance/paper-cycle")
 async def api_trade_director_acceptance_paper_cycle():
     return await trade_acceptance_runner.run_controlled_paper_cycle()

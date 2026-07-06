@@ -4,6 +4,7 @@ from backend.radar.score_engine import SCORE_WEIGHTS, direction, score_engine
 from backend.radar.fund_confirm import fund_confirm, fund_confirm_components
 from backend.radar.fake_breakout import fake_breakout
 from backend.ai_strategy.codex_cli_strategy_client import CODEX_PROMPT, CodexCLIStrategyClient, normalized_codex_reasoning_effort
+from backend.ai_strategy.ai_service import ai_service
 from backend.ai_strategy.context_compressor import context_compressor
 from backend.ai_strategy.dynamic_trade_model import auto_trading_risk_model
 from backend.ai_strategy.openai_strategy_client import openai_strategy_client
@@ -7194,6 +7195,197 @@ def test_ai_trade_director_manual_run_cannot_bypass_live_loop_guard(monkeypatch)
     assert out["results"][0]["reason"] == "strict_candidate_mode_required_for_auto_loop"
     assert out["results"][0]["live_order_surface"] is True
     assert out["trade_director"]["manual_override"] is False
+
+
+def test_ai_trade_director_codex_paper_probe_blocks_live_order_surface(monkeypatch):
+    position_registry.open.clear()
+    item = high_quality_item(symbol="CODEXPROBEBLOCKUSDT", side="LONG", price=100)
+    monkeypatch.setattr(settings, "ai_enabled", True)
+    monkeypatch.setattr(settings, "ai_strategy_provider", "codex_cli")
+    monkeypatch.setattr(settings, "require_codex_strategy_for_entry", True)
+    monkeypatch.setattr(settings, "trade_mode", "live")
+    monkeypatch.setattr(settings, "live_trading_enabled", True)
+    monkeypatch.setattr(settings, "live_use_test_order", False)
+    monkeypatch.setattr(radar_engine, "top50", [item])
+
+    async def fail_run_once(*, source="manual"):
+        raise AssertionError("codex paper probe must not run while live trading is enabled")
+
+    monkeypatch.setattr(ai_trade_director, "run_once", fail_run_once)
+
+    out = __import__("asyncio").run(ai_trade_director.run_codex_paper_probe())
+
+    assert out["ok"] is False
+    assert out["mode"] == "codex_paper_probe"
+    assert out["sampling_status"] == "BLOCKED"
+    assert out["blocked_reason"] == "live_trading_enabled_for_codex_paper_probe"
+    assert out["safety"]["real_order_allowed"] is True
+
+
+def test_ai_trade_director_codex_paper_probe_reports_sampling_evidence(monkeypatch):
+    position_registry.open.clear()
+    item = high_quality_item(symbol="CODEXPROBEUSDT", side="LONG", price=100)
+    monkeypatch.setattr(settings, "ai_enabled", True)
+    monkeypatch.setattr(settings, "ai_strategy_provider", "codex_cli")
+    monkeypatch.setattr(settings, "require_codex_strategy_for_entry", True)
+    monkeypatch.setattr(settings, "trade_mode", "live")
+    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    monkeypatch.setattr(settings, "live_use_test_order", True)
+    monkeypatch.setattr(settings, "auto_trading_candidate_mode", "paper_top")
+    monkeypatch.setattr(radar_engine, "top50", [item])
+    monkeypatch.setattr(autotrader, "_market_data_ok", lambda: (True, ""))
+    monkeypatch.setattr(autotrader, "_market_data_health", lambda: {"market_refresh_degraded": False, "market_snapshot_count": 120})
+    monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([item], "paper_top"))
+    monkeypatch.setattr(
+        learning_data_audit,
+        "compact",
+        lambda: {
+            "trust_level": "LOW",
+            "production_grade": False,
+            "sources": {
+                "real_closed_samples_with_radar": 5,
+                "codex_real_closed_samples_with_radar": 0,
+            },
+            "market_backtest": {"available": False},
+        },
+    )
+    status_calls = []
+
+    def fake_status(**kwargs):
+        status_calls.append(kwargs)
+        invocation_count = 4 + len(status_calls) - 1
+        return {
+            "enabled": True,
+            "provider": "codex_cli",
+            "candidate_source": kwargs.get("candidate_source", ""),
+            "candidate_count_before_ai": kwargs.get("candidate_count", 0),
+            "will_invoke_for_current_candidates": True,
+            "not_invoked_reason": "",
+            "codex_cli": {
+                "ready_for_generation": True,
+                "availability_reason": "ok",
+                "invocation_count": invocation_count,
+                "last_status": "completed" if invocation_count > 4 else "idle",
+                "last_symbol": item.symbol if invocation_count > 4 else "",
+                "last_action": "WAIT" if invocation_count > 4 else "",
+            },
+        }
+
+    async def fake_run_once(*, source="manual"):
+        assert source == "codex_paper_probe"
+        return {
+            "results": [
+                {
+                    "symbol": item.symbol,
+                    "candidate_source": "paper_top",
+                    "decision": "KEEP_WAITING",
+                    "reason": "wait_active",
+                    "ai_decision_observation": {"recorded": True, "observation_id": "aiobs_test"},
+                }
+            ],
+            "trade_director": {"decision_summary": {"opened": False, "decision": "KEEP_WAITING"}},
+        }
+
+    monkeypatch.setattr(ai_service, "status", fake_status)
+    monkeypatch.setattr(ai_trade_director, "run_once", fake_run_once)
+
+    out = __import__("asyncio").run(ai_trade_director.run_codex_paper_probe())
+
+    assert out["ok"] is True
+    assert out["mode"] == "codex_paper_probe"
+    assert out["sampling_status"] == "NO_OPEN"
+    assert out["candidate_source"] == "paper_top"
+    assert out["candidate_symbols"] == [item.symbol]
+    assert out["codex_invocation"]["invoked"] is True
+    assert out["codex_invocation"]["before_count"] == 4
+    assert out["codex_invocation"]["after_count"] == 5
+    assert out["decision_path"][0]["decision"] == "KEEP_WAITING"
+    assert out["decision_path"][0]["observation_recorded"] is True
+    assert out["graduation"]["codex_real_closed_samples_with_radar"] == 0
+    assert out["next_action"] == "continue_sampling_until_open_or_market_gate_changes"
+
+
+def test_ai_trade_director_codex_paper_probe_reports_pending_codex_position_when_capacity_full(monkeypatch):
+    position_registry.open.clear()
+    item = high_quality_item(symbol="CODEXPENDINGUSDT", side="SHORT", price=100)
+    pending = feedback_position("codex_pending_strategy", item.symbol, "pos_codex_pending")
+    pending.side = "SHORT"
+    position_registry.open[pending.position_id] = pending
+    monkeypatch.setattr(settings, "ai_enabled", True)
+    monkeypatch.setattr(settings, "ai_strategy_provider", "codex_cli")
+    monkeypatch.setattr(settings, "require_codex_strategy_for_entry", True)
+    monkeypatch.setattr(settings, "trade_mode", "live")
+    monkeypatch.setattr(settings, "live_trading_enabled", False)
+    monkeypatch.setattr(settings, "live_use_test_order", True)
+    monkeypatch.setattr(radar_engine, "top50", [item])
+    monkeypatch.setattr(autotrader, "_market_data_ok", lambda: (True, ""))
+    monkeypatch.setattr(autotrader, "_market_data_health", lambda: {"market_refresh_degraded": False, "market_snapshot_count": 120})
+    monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([item], "paper_top"))
+    monkeypatch.setattr(
+        learning_data_audit,
+        "compact",
+        lambda: {
+            "trust_level": "LOW",
+            "production_grade": False,
+            "sources": {
+                "real_closed_samples_with_radar": 5,
+                "codex_real_closed_samples_with_radar": 0,
+            },
+            "market_backtest": {"available": False},
+        },
+    )
+    monkeypatch.setattr(
+        strategy_registry,
+        "get",
+        lambda strategy_id: {"strategy_id": strategy_id, "provider": "codex_cli", "source": "ai_generated_codex_cli"},
+    )
+
+    def fake_status(**kwargs):
+        return {
+            "enabled": True,
+            "provider": "codex_cli",
+            "candidate_source": kwargs.get("candidate_source", ""),
+            "candidate_count_before_ai": kwargs.get("candidate_count", 0),
+            "will_invoke_for_current_candidates": False,
+            "not_invoked_reason": "capacity_full",
+            "codex_cli": {
+                "ready_for_generation": True,
+                "availability_reason": "ok",
+                "invocation_count": 8,
+                "last_status": "ok",
+                "last_symbol": item.symbol,
+                "last_action": "OPEN_SHORT",
+            },
+        }
+
+    async def fail_run_once(*, source="manual"):
+        raise AssertionError("probe should not open another position while a Codex paper sample is pending close")
+
+    monkeypatch.setattr(ai_service, "status", fake_status)
+    monkeypatch.setattr(ai_trade_director, "run_once", fail_run_once)
+
+    try:
+        out = __import__("asyncio").run(ai_trade_director.run_codex_paper_probe())
+    finally:
+        position_registry.open.pop(pending.position_id, None)
+
+    assert out["ok"] is True
+    assert out["sampling_status"] == "OPEN_POSITION_PENDING_CLOSE"
+    assert out["blocked_reason"] == "capacity_full_existing_codex_paper_position"
+    assert out["open_positions"][0]["position_id"] == pending.position_id
+    assert out["open_positions"][0]["provider"] == "codex_cli"
+    assert out["next_action"] == "wait_for_position_manager_close_to_create_codex_closed_sample"
+
+
+def test_codex_paper_probe_api_delegates_to_trade_director(monkeypatch):
+    async def fake_probe():
+        return {"ok": True, "mode": "codex_paper_probe", "sampling_status": "NO_OPEN"}
+
+    monkeypatch.setattr(ai_trade_director, "run_codex_paper_probe", fake_probe)
+
+    out = __import__("asyncio").run(main_module.api_trade_director_codex_paper_probe())
+
+    assert out == {"ok": True, "mode": "codex_paper_probe", "sampling_status": "NO_OPEN"}
 
 
 def test_trade_acceptance_runner_verifies_real_paper_cycle(monkeypatch):

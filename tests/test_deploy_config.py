@@ -196,6 +196,23 @@ def test_codex_strategy_generation_verification_script_runs_real_docker_codex_pa
     assert "strategy_contract_quality" in module
 
 
+def test_codex_paper_sampling_script_calls_probe_and_reports_evidence():
+    script = (ROOT / "scripts" / "run_codex_paper_sampling.ps1").read_text(encoding="utf-8")
+
+    assert "api/trade-director/codex-paper-probe" in script
+    assert "sampling_status" in script
+    assert "codex_invocation" in script
+    assert "candidate_symbols" in script
+    assert "OPEN_POSITION_PENDING_CLOSE" in script
+    assert "codex_real_closed_samples_with_radar" in script
+    assert "real_order_allowed" in script
+    assert "X-API-Token" in script
+    assert "Read-ApiToken" in script
+    assert 'Write-Host "$apiToken' not in script
+    assert "Write-Host $apiToken" not in script
+    assert "BINANCE_API_SECRET" not in script
+
+
 def test_enable_codex_strategy_mode_script_persists_host_env_without_leaking_secrets(tmp_path):
     script = ROOT / "scripts" / "enable_codex_strategy_mode.ps1"
     env_path = tmp_path / ".env"
