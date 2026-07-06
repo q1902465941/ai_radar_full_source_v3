@@ -70,6 +70,8 @@ function renderRealtimeStrategyPlans(out) {
   const lastPlan = out.last_plan || {};
   const plan = lastPlan.plan || {};
   const lastTradable = audit.last_tradable_strategy || {};
+  const tradableBySource = audit.tradable_strategy_by_source || {};
+  const sourceSummary = Object.entries(tradableBySource).map(([k, v]) => `${k}:${v}`).join(', ') || '--';
   const radarWeights = out.radar_weight_calibration || {};
   const radarWeightFactors = (radarWeights.adjusted_features || []).slice(0, 4).join(', ') || '--';
   if (statusEl) {
@@ -86,8 +88,9 @@ function renderRealtimeStrategyPlans(out) {
       ['side', plan.side || '--'],
       ['confidence', plan.confidence ?? '--'],
       ['tradable strategies', audit.tradable_strategy_count ?? 0],
+      ['tradable sources', sourceSummary],
       ['invalid strategies', audit.invalid_strategy_count ?? 0],
-      ['last tradable', lastTradable.symbol ? `${lastTradable.symbol} ${lastTradable.action || '--'} ${lastTradable.side || '--'}` : '--'],
+      ['last tradable', lastTradable.symbol ? `${lastTradable.candidate_source || '--'} / ${lastTradable.symbol} ${lastTradable.action || '--'} ${lastTradable.side || '--'}` : '--'],
       ['recent audit', (audit.recent_strategy_tasks || []).length],
       ['entry', plan.ideal_entry_price ?? '--'],
       ['SL / TP1 / TP2', `${plan.stop_loss ?? '--'} / ${plan.tp1 ?? '--'} / ${plan.tp2 ?? '--'}`],

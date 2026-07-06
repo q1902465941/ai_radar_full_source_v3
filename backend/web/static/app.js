@@ -205,15 +205,20 @@ async function refreshTop() {
   const market = s.market_data || {};
   const sourceParts = [market.public_source || s.market_data_source || 'online', market.refresh_source].filter(Boolean);
   const sourceText = sourceParts.join(' / ');
+  const marketHealth = market.degraded
+    ? `error=${market.error || 'degraded'}`
+    : (market.warning ? `warning=${market.warning}` : 'health=ok');
   const marketDetail = [
     `mode=${market.mode || '--'}`,
     `top50=${market.top50_count ?? s.top50_count ?? '--'}`,
     `snapshots=${market.snapshot_count ?? '--'}`,
     `active=${market.active_coin_count ?? '--'}`,
     `dynamic=${market.dynamic_stream_count ?? '--'}`,
-    market.degraded ? `error=${market.error || 'degraded'}` : 'health=ok',
+    marketHealth,
   ].join(' | ');
-  const qualityText = market.degraded ? 'DEGRADED' : `Top50 ${market.top50_count ?? s.top50_count ?? '--'}`;
+  const qualityText = market.degraded
+    ? 'DEGRADED'
+    : `${market.warning ? 'WARN ' : ''}Top50 ${market.top50_count ?? s.top50_count ?? '--'}`;
   bar.innerHTML = `${majors.map((x) => {
     const hasPrice = Number(x.price || 0) > 0;
     const changeValue = finiteNumber(x.change);
@@ -790,9 +795,10 @@ function renderSystemReadiness(data) {
   const ticker = ws.ticker || {};
   const dynamic = ws.dynamic || {};
   const database = data.database || {};
+  const marketHealth = market.degraded ? 'DEGRADED' : (market.warning ? 'WARN' : 'OK');
   const cards = [
     ['Overall', `${data.status || '--'} / blockers ${(data.blockers || []).length}`],
-    ['Market', `${market.refresh_source || '--'} / snapshots ${market.effective_snapshot_count ?? '--'}`],
+    ['Market', `${market.refresh_source || '--'} / snapshots ${market.effective_snapshot_count ?? '--'} / ${marketHealth}`],
     ['Radar Scan', `${market.scan && market.scan.in_progress ? 'RUNNING' : 'IDLE'} / top50 ${market.scan ? market.scan.top50_count ?? '--' : '--'}`],
     ['WAIT', `${wait.status || '--'} / candidates ${(wait.candidate_symbols || []).length}`],
     ['Paper Loop', `${yesNo(paper.auto_loop_enabled)} / ${paper.candidate_mode || '--'}`],

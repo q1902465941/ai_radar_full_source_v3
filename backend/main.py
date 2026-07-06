@@ -228,6 +228,7 @@ def _state_market_data(scan_status: dict[str, Any]) -> dict[str, Any]:
         "refresh_source": str(refresh.get("source") or ""),
         "degraded": bool(refresh.get("degraded")),
         "error": str(refresh.get("error") or ""),
+        "warning": str(refresh.get("warning") or ""),
         "snapshot_count": snapshot_count,
         "symbol_count": _safe_int(refresh.get("symbol_count"), snapshot_count),
         "top50_count": top50_count,

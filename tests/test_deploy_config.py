@@ -99,8 +99,10 @@ def test_strategy_ai_page_surfaces_tradable_strategy_audit():
     template = (ROOT / "backend" / "web" / "templates" / "strategy_ai.html").read_text(encoding="utf-8")
 
     assert "tradable_strategy_count" in template
+    assert "tradable_strategy_by_source" in template
     assert "invalid_strategy_count" in template
     assert "last_tradable_strategy" in template
+    assert "candidate_source" in template
     assert "recent_strategy_tasks" in template
 
 
@@ -127,6 +129,7 @@ def test_env_example_defaults_to_mainnet_public_market_data():
 
 def test_docker_stack_verification_script_checks_monitor_and_mainnet_market_data():
     script = (ROOT / "scripts" / "verify_docker_stack.ps1").read_text(encoding="utf-8")
+    monitor_js = (ROOT / "backend" / "web" / "static" / "app.js").read_text(encoding="utf-8")
 
     assert '[string]$MonitorBaseUrl = "http://127.0.0.1:8080"' in script
     assert "Read-HttpTextWithRetry" in script
@@ -137,6 +140,8 @@ def test_docker_stack_verification_script_checks_monitor_and_mainnet_market_data
     assert "market_data_source" in script
     assert "mainnet" in script
     assert "market_refresh.degraded" in script
+    assert "warning=${market.warning}" in monitor_js
+    assert "market.warning ? 'WARN ' : ''" in monitor_js
     assert "https://fapi.binance.com/fapi/v1/ticker/price?symbol=$encodedSymbol" in script
     assert "api/trade-director/acceptance/paper-cycle" in script
     assert "learning_open_recorded" in script
@@ -169,7 +174,11 @@ def test_codex_strategy_generation_verification_script_runs_real_docker_codex_pa
     assert "contract_quality" in module
     assert "codex_real_strategy_generated" in module
     assert "tradable_strategy_count" in module
+    assert "tradable_strategy_by_source" in module
+    assert "production_acceptance" in module
     assert "last_tradable_strategy" in module
+    assert "recent_strategy_tasks" in module
+    assert "ai_task_audit_missing_current_production_acceptance_tradable_strategy" in module
     assert '"OPEN_LONG"' in module
     assert "codex_cli_unavailable" in module
     assert "strategy_contract_quality" in module

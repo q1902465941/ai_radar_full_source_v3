@@ -153,6 +153,7 @@ def market_data_status(*, warmup_started: bool = False, scan_error: str = "") ->
         "refresh_source": refresh.get("source") or binance_factor_source.last_refresh_source,
         "degraded": bool(refresh.get("degraded")),
         "error": refresh.get("error") or "",
+        "warning": refresh.get("warning") or getattr(binance_factor_source, "last_refresh_warning", ""),
         "scan": {
             "in_progress": bool(scan.get("in_progress")),
             "running_seconds": scan.get("running_seconds"),

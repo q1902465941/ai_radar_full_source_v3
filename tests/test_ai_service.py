@@ -251,7 +251,10 @@ def test_ai_service_audit_summary_counts_tradable_strategy_tasks(tmp_path):
     assert audit["open_strategy_count"] == 1
     assert audit["last_tradable_strategy"]["action"] == "OPEN_LONG"
     assert audit["last_tradable_strategy"]["provider"] == "codex_cli"
+    assert audit["last_tradable_strategy"]["candidate_source"] == "strict"
+    assert audit["tradable_strategy_by_source"]["strict"] == 1
     assert audit["recent_strategy_tasks"][0]["valid"] is False
+    assert audit["recent_strategy_tasks"][0]["candidate_source"] == "strict"
     assert audit["recent_strategy_tasks"][0]["validator_reason"] in {"sl_too_close", "tp1_too_close"}
 
 

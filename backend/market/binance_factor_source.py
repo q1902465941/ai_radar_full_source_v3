@@ -24,6 +24,7 @@ class BinanceFactorSource:
         self._previous_open_interest: dict[str, float] = {}
         self.last_refresh_degraded = False
         self.last_refresh_error = ""
+        self.last_refresh_warning = ""
         self.last_refresh_source = ""
         self.last_symbol_count = 0
         self.last_snapshot_count = 0
@@ -34,6 +35,7 @@ class BinanceFactorSource:
         self.refresh_in_progress = False
         self.current_refresh_degraded = False
         self.current_refresh_error = ""
+        self.current_refresh_warning = ""
         self.current_refresh_source = ""
         self.current_symbol_count = 0
         self.current_snapshot_count = 0
@@ -54,7 +56,11 @@ class BinanceFactorSource:
         self.last_failed_symbols = []
 
         try:
-            premium_rows = await self._safe_fetch_rows("premium_index", self.client.premium_index)
+            premium_rows = await self._safe_fetch_rows(
+                "premium_index",
+                self.client.premium_index,
+                degrade_on_failure=False,
+            )
             try:
                 ticker_rows = _as_list(binance_ticker_stream.snapshot_rows())
             except Exception as exc:
@@ -69,6 +75,7 @@ class BinanceFactorSource:
 
             premium_rows, ticker_rows = self._complete_market_rows(premium_rows, ticker_rows)
             if not premium_rows or not ticker_rows:
+                self._promote_current_warnings_to_degraded()
                 return self._cached_or_empty("market_rows_unavailable")
 
             premiums = {str(row.get("symbol", "")): row for row in premium_rows if isinstance(row, dict)}
@@ -122,7 +129,7 @@ class BinanceFactorSource:
             self.refresh_in_progress = False
             raise
 
-    async def _safe_fetch_rows(self, label: str, fetch) -> list[Any]:
+    async def _safe_fetch_rows(self, label: str, fetch, *, degrade_on_failure: bool = True) -> list[Any]:
         last_exc: Exception | None = None
         for attempt in range(2):
             try:
@@ -132,7 +139,11 @@ class BinanceFactorSource:
                 if attempt == 0:
                     await asyncio.sleep(0.25)
         if last_exc is not None:
-            self._mark_degraded(f"{label}:{type(last_exc).__name__}:{_compact_error(last_exc)}")
+            reason = f"{label}:{type(last_exc).__name__}:{_compact_error(last_exc)}"
+            if degrade_on_failure:
+                self._mark_degraded(reason)
+            else:
+                self._mark_warning(reason)
         return []
 
     async def _refresh_exchange_symbol_meta(self) -> None:
@@ -165,7 +176,7 @@ class BinanceFactorSource:
         premiums = [row for row in premium_rows if isinstance(row, dict) and row.get("symbol")]
         tickers = [row for row in ticker_rows if isinstance(row, dict) and row.get("symbol")]
         if not premiums and tickers:
-            self._mark_degraded("premium_index_missing_using_ticker_prices")
+            self._mark_warning("premium_index_missing_using_ticker_prices")
             premiums = [
                 {
                     "symbol": row.get("symbol"),
@@ -208,10 +219,29 @@ class BinanceFactorSource:
         else:
             self.last_refresh_error = ";".join(parts[:8])
 
+    def _mark_warning(self, reason: str) -> None:
+        if self.refresh_in_progress:
+            parts = [part for part in self.current_refresh_warning.split(";") if part]
+        else:
+            parts = [part for part in self.last_refresh_warning.split(";") if part]
+        if reason not in parts:
+            parts.append(reason)
+        if self.refresh_in_progress:
+            self.current_refresh_warning = ";".join(parts[:8])
+        else:
+            self.last_refresh_warning = ";".join(parts[:8])
+
+    def _promote_current_warnings_to_degraded(self) -> None:
+        if not self.current_refresh_warning:
+            return
+        for reason in [part for part in self.current_refresh_warning.split(";") if part]:
+            self._mark_degraded(reason)
+
     def _begin_refresh_diagnostics(self) -> None:
         self.refresh_in_progress = True
         self.current_refresh_degraded = False
         self.current_refresh_error = ""
+        self.current_refresh_warning = ""
         self.current_refresh_source = ""
         self.current_symbol_count = 0
         self.current_snapshot_count = 0
@@ -222,6 +252,7 @@ class BinanceFactorSource:
     def _finish_refresh_diagnostics(self, snapshot_count: int) -> None:
         self.last_refresh_degraded = self.current_refresh_degraded
         self.last_refresh_error = self.current_refresh_error
+        self.last_refresh_warning = self.current_refresh_warning
         self.last_refresh_source = self.current_refresh_source
         self.last_symbol_count = self.current_symbol_count
         self.last_snapshot_count = int(snapshot_count)

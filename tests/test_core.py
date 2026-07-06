@@ -77,6 +77,7 @@ def default_disable_event_calibration(monkeypatch):
     monkeypatch.setattr(settings, "ai_position_review_enabled", False)
     binance_factor_source.last_refresh_degraded = False
     binance_factor_source.last_refresh_error = ""
+    binance_factor_source.last_refresh_warning = ""
     binance_factor_source.last_refresh_source = "test"
     binance_factor_source.last_symbol_count = 1
     binance_factor_source.last_snapshot_count = 1
@@ -272,6 +273,7 @@ def test_state_exposes_market_data_contract_for_monitor_debugging(monkeypatch):
                 "source": "ws_ticker",
                 "degraded": False,
                 "error": "",
+                "warning": "premium_index_missing_using_ticker_prices",
                 "snapshot_count": 80,
                 "symbol_count": 80,
             },
@@ -288,6 +290,7 @@ def test_state_exposes_market_data_contract_for_monitor_debugging(monkeypatch):
     assert out["market_data"]["public_source"] == "mainnet"
     assert out["market_data"]["refresh_source"] == "ws_ticker"
     assert out["market_data"]["degraded"] is False
+    assert out["market_data"]["warning"] == "premium_index_missing_using_ticker_prices"
     assert out["market_data"]["snapshot_count"] == 80
     assert out["market_data"]["active_coin_count"] == 7
     assert out["market_data"]["dynamic_stream_count"] == 3
@@ -1274,9 +1277,10 @@ def test_binance_factor_source_degrades_to_ticker_prices_when_premium_fails(monk
 
     assert len(snaps) == 1
     assert snaps[0].price > 0
-    assert source.last_refresh_degraded
-    assert "premium_index:TimeoutError" in source.last_refresh_error
-    assert "premium_index_missing_using_ticker_prices" in source.last_refresh_error
+    assert source.last_refresh_degraded is False
+    assert source.last_refresh_error == ""
+    assert "premium_index:TimeoutError" in source.last_refresh_warning
+    assert "premium_index_missing_using_ticker_prices" in source.last_refresh_warning
 
 def test_binance_factor_source_uses_cache_when_market_rows_fail(monkeypatch):
     monkeypatch.setattr(settings, "binance_symbol_limit", 1)

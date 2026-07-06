@@ -123,9 +123,11 @@ class AIService:
                     .scalars()
                     .all()
                 )
-                validation_values = (
+                success_rows = (
                     session.execute(
-                        select(AITaskRecord.validation_json).where(AITaskRecord.state == "succeeded")
+                        select(AITaskRecord)
+                        .where(AITaskRecord.state == "succeeded")
+                        .order_by(desc(AITaskRecord.id))
                     )
                     .scalars()
                     .all()
@@ -133,12 +135,33 @@ class AIService:
         except Exception as exc:
             return {"ai_tasks_table": False, "error": f"{type(exc).__name__}:{exc}"}
         validation_rows = [
-            row
-            for row in validation_values
-            if isinstance(row, dict)
+            row.validation_json
+            for row in success_rows
+            if isinstance(row.validation_json, dict)
         ]
+        tradable_by_source: dict[str, int] = {}
+        open_by_source: dict[str, int] = {}
+        invalid_by_source: dict[str, int] = {}
+        for row in success_rows:
+            validation = row.validation_json if isinstance(row.validation_json, dict) else {}
+            source = _task_candidate_source(row)
+            if validation.get("tradable_strategy") is True:
+                tradable_by_source[source] = tradable_by_source.get(source, 0) + 1
+            if validation.get("opens") is True:
+                open_by_source[source] = open_by_source.get(source, 0) + 1
+            if validation.get("valid") is False:
+                invalid_by_source[source] = invalid_by_source.get(source, 0) + 1
         recent = [_audit_task_snapshot(row) for row in rows[:10]]
-        last_tradable = next((row for row in recent if row.get("tradable_strategy")), {})
+        last_tradable_row = next(
+            (
+                row
+                for row in success_rows
+                if isinstance(row.validation_json, dict)
+                and row.validation_json.get("tradable_strategy") is True
+            ),
+            None,
+        )
+        last_tradable = _audit_task_snapshot(last_tradable_row) if last_tradable_row is not None else {}
         return {
             "ai_tasks_table": True,
             "total": int(total or 0),
@@ -149,6 +172,9 @@ class AIService:
             "invalid_strategy_count": sum(1 for row in validation_rows if row.get("valid") is False),
             "open_strategy_count": sum(1 for row in validation_rows if row.get("opens") is True),
             "wait_strategy_count": sum(1 for row in validation_rows if row.get("action") == "WAIT"),
+            "tradable_strategy_by_source": tradable_by_source,
+            "open_strategy_by_source": open_by_source,
+            "invalid_strategy_by_source": invalid_by_source,
             "last_tradable_strategy": last_tradable,
             "recent_strategy_tasks": recent,
         }
@@ -197,6 +223,7 @@ def _audit_task_snapshot(row: AITaskRecord) -> dict[str, Any]:
     return {
         "task_id": row.task_id,
         "state": row.state,
+        "candidate_source": _task_candidate_source(row),
         "provider": validation.get("provider") or row.provider,
         "model": row.model,
         "action": validation.get("action") or output.get("action"),
@@ -209,6 +236,15 @@ def _audit_task_snapshot(row: AITaskRecord) -> dict[str, Any]:
         "contract_quality_ok": validation.get("contract_quality_ok"),
         "error": row.error,
     }
+
+
+def _task_candidate_source(row: AITaskRecord) -> str:
+    context = row.context_json if isinstance(row.context_json, dict) else {}
+    source = str(context.get("candidate_source") or "").strip()
+    if source:
+        return source
+    nested = context.get("position_context") if isinstance(context.get("position_context"), dict) else {}
+    return _candidate_source(nested) or "unknown"
 
 
 def _jsonable_dataclass(value: Any) -> dict[str, Any]:

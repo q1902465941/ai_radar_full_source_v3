@@ -291,6 +291,8 @@ async def run_acceptance() -> tuple[int, dict[str, Any]]:
     context = build_acceptance_context(item)
     config_error = _config_error()
     status = ai_service.status(candidate_count=1, candidate_source="production_acceptance")
+    before_audit = status.get("audit") if isinstance(status.get("audit"), dict) else {}
+    before_total = int(before_audit.get("total") or 0)
     codex_status = status.get("codex_cli") if isinstance(status.get("codex_cli"), dict) else {}
     if config_error:
         return _fail(config_error, status=status)
@@ -328,11 +330,21 @@ async def run_acceptance() -> tuple[int, dict[str, Any]]:
         failures.append("strategy_contract_quality_not_ok")
     if isinstance(allowed_stages, dict) and allowed_stages.get("live") is True:
         failures.append("live_stage_enabled_without_explicit_approval")
-    if int(audit.get("tradable_strategy_count") or 0) < 1:
-        failures.append("ai_task_audit_missing_tradable_strategy")
+    tradable_by_source = (
+        audit.get("tradable_strategy_by_source")
+        if isinstance(audit.get("tradable_strategy_by_source"), dict)
+        else {}
+    )
+    if int(tradable_by_source.get("production_acceptance") or 0) < 1:
+        failures.append("ai_task_audit_missing_production_acceptance_tradable_strategy")
     last_tradable = audit.get("last_tradable_strategy") if isinstance(audit.get("last_tradable_strategy"), dict) else {}
-    if last_tradable.get("action") != EXPECTED_ACTION:
-        failures.append(f"ai_task_audit_last_tradable_not_{EXPECTED_ACTION}:{last_tradable.get('action') or 'missing'}")
+    recent_tasks = audit.get("recent_strategy_tasks") if isinstance(audit.get("recent_strategy_tasks"), list) else []
+    after_total = int(audit.get("total") or 0)
+    if after_total <= before_total:
+        failures.append(f"ai_task_audit_not_incremented:{before_total}->{after_total}")
+    current_acceptance_task = _find_current_acceptance_task(recent_tasks, item.symbol)
+    if not current_acceptance_task:
+        failures.append("ai_task_audit_missing_current_production_acceptance_tradable_strategy")
     if failures:
         return _fail("codex_strategy_generation_failed", failures=failures, status=post_status, plan=plan)
 
@@ -359,8 +371,11 @@ async def run_acceptance() -> tuple[int, dict[str, Any]]:
         "codex_status": _compact_codex_status(codex_status),
         "ai_task_audit": {
             "tradable_strategy_count": audit.get("tradable_strategy_count"),
+            "tradable_strategy_by_source": tradable_by_source,
             "invalid_strategy_count": audit.get("invalid_strategy_count"),
             "last_tradable_strategy": last_tradable,
+            "current_acceptance_task": current_acceptance_task,
+            "recent_strategy_tasks": recent_tasks[:3],
         },
     }
 
@@ -390,6 +405,24 @@ def _fail(
         "status": _compact_status(status or {}),
         "plan": _plan_summary(plan),
     }
+
+
+def _find_current_acceptance_task(tasks: list[Any], symbol: str) -> dict[str, Any]:
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        if task.get("candidate_source") != "production_acceptance":
+            continue
+        if task.get("symbol") != symbol:
+            continue
+        if task.get("action") != EXPECTED_ACTION:
+            continue
+        if task.get("tradable_strategy") is not True:
+            continue
+        if task.get("valid") is not True:
+            continue
+        return task
+    return {}
 
 
 def _compact_status(status: dict[str, Any]) -> dict[str, Any]:
