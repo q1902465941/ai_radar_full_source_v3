@@ -188,6 +188,41 @@ def test_state_uses_realtime_quotes_for_major_prices_when_snapshots_missing(monk
     assert majors["BTCUSDT"]["stale"] is False
 
 
+def test_state_uses_ws_ticker_change_for_major_when_snapshots_missing(monkeypatch):
+    market_service.last_snapshots = {}
+    monkeypatch.setattr(binance_rest, "last_public_source", "mainnet")
+    monkeypatch.setattr(
+        main_module.binance_ticker_stream,
+        "snapshot_rows",
+        lambda: [
+            {"symbol": "BTCUSDT", "priceChangePercent": "1.23", "quoteVolume": "1234567"},
+            {"symbol": "ETHUSDT", "priceChangePercent": "-0.45", "quoteVolume": "7654321"},
+        ],
+    )
+
+    async def fake_price_quote(symbol_arg, side_arg=None):
+        return PriceQuote(
+            symbol=symbol_arg,
+            price=62661.9 if symbol_arg == "BTCUSDT" else 100.0,
+            source="book_ticker_mid",
+            ts_ms=now_ms(),
+            age_seconds=0.0,
+            stale=False,
+        )
+
+    monkeypatch.setattr(market_service, "price_quote", fake_price_quote)
+
+    out = asyncio.run(main_module.state())
+    majors = {row["symbol"]: row for row in out["major"]}
+
+    assert majors["BTCUSDT"]["price"] == 62661.9
+    assert majors["BTCUSDT"]["change"] == 1.23
+    assert majors["BTCUSDT"]["change_24h"] == 1.23
+    assert majors["BTCUSDT"]["change_source"] == "ws_ticker_24h"
+    assert majors["BTCUSDT"]["quote_volume_24h"] == 1234567.0
+    assert majors["ETHUSDT"]["change"] == -0.45
+
+
 def test_state_prefers_realtime_quote_over_cached_major_snapshot(monkeypatch):
     market_service.last_snapshots = {
         "BTCUSDT": MarketSnapshot("BTCUSDT", 1.0, 0.7, 0.8, 0.9, 1, 0, 0, 0.5, 0.5, 0, 0.1, 0.1)

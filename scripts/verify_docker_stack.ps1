@@ -3,6 +3,7 @@ param(
     [string]$V2BaseUrl = "http://127.0.0.1:8002",
     [double]$MaxPriceDriftPct = 5,
     [double]$RadarMaxPriceDriftPct = 1.0,
+    [double]$MaxMajorChangeDriftPct = 0.25,
     [string]$ApiToken = "",
     [switch]$SkipPaperAcceptance,
     [switch]$SkipExternalBinanceCheck
@@ -65,6 +66,40 @@ function Invoke-PostJson {
     return Invoke-RestMethod -Method Post -Uri $Url -Headers $headers -Body $json -ContentType "application/json" -TimeoutSec 120
 }
 
+function Get-MonitorMajor {
+    param(
+        [object]$State,
+        [string]$Symbol
+    )
+    return $State.major | Where-Object { $_.symbol -eq $Symbol } | Select-Object -First 1
+}
+
+function Assert-MonitorMajorChangeAgainstBinance {
+    param([string]$Symbol = "BTCUSDT")
+    if ($SkipExternalBinanceCheck) {
+        return
+    }
+    $state = $null
+    $major = $null
+    for ($i = 0; $i -lt 20; $i++) {
+        $state = Read-Json "$MonitorBaseUrl/api/state"
+        $major = Get-MonitorMajor -State $state -Symbol $Symbol
+        if ($null -ne $major -and $null -ne $major.PSObject.Properties["change_24h"] -and $null -ne $major.change_24h) {
+            break
+        }
+        Start-Sleep -Seconds 1
+    }
+    Assert-True ($null -ne $major) "$Symbol is missing from monitor major market cards"
+    Assert-True ($null -ne $major.PSObject.Properties["change_24h"] -and $null -ne $major.change_24h) "$Symbol monitor 24h change is missing"
+    Assert-True ($major.change_source -ne "unavailable") "$Symbol monitor change source is unavailable"
+    $binance = Read-Json "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=$Symbol"
+    $monitorChange = [double]$major.change_24h
+    $binanceChange = [double]$binance.priceChangePercent
+    $driftPct = [Math]::Abs($monitorChange - $binanceChange)
+    Assert-True ($driftPct -le $MaxMajorChangeDriftPct) "$Symbol monitor 24h change drift $([Math]::Round($driftPct, 3)) percentage points exceeds $MaxMajorChangeDriftPct"
+    Write-Host "$Symbol 24h change drift ok: monitor=$([Math]::Round($monitorChange, 3)) binance=$([Math]::Round($binanceChange, 3))"
+}
+
 function Assert-RadarPricesAgainstBinance {
     param(
         [object]$Radar,
@@ -123,7 +158,7 @@ Invoke-Step "v2 api health" {
 Invoke-Step "monitor state uses mainnet market data" {
     $state = Read-Json "$MonitorBaseUrl/api/state"
     Assert-True ($state.market_data_source -eq "mainnet") "market_data_source is '$($state.market_data_source)', expected mainnet"
-    $btc = $state.major | Where-Object { $_.symbol -eq "BTCUSDT" } | Select-Object -First 1
+    $btc = Get-MonitorMajor -State $state -Symbol "BTCUSDT"
     Assert-True ($null -ne $btc) "BTCUSDT is missing from monitor major market cards"
     Assert-True ([double]$btc.price -gt 0) "BTCUSDT monitor price is not positive"
 }
@@ -131,13 +166,17 @@ Invoke-Step "monitor state uses mainnet market data" {
 if (-not $SkipExternalBinanceCheck) {
     Invoke-Step "mainnet BTC price drift" {
         $state = Read-Json "$MonitorBaseUrl/api/state"
-        $btc = $state.major | Where-Object { $_.symbol -eq "BTCUSDT" } | Select-Object -First 1
+        $btc = Get-MonitorMajor -State $state -Symbol "BTCUSDT"
         $binance = Read-Json "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT"
         $monitorPrice = [double]$btc.price
         $binancePrice = [double]$binance.price
         Assert-True ($binancePrice -gt 0) "Binance mainnet BTC price is not positive"
         $driftPct = [Math]::Abs(($monitorPrice - $binancePrice) / $binancePrice * 100.0)
         Assert-True ($driftPct -le $MaxPriceDriftPct) "BTCUSDT monitor price drift $([Math]::Round($driftPct, 3))% exceeds $MaxPriceDriftPct%"
+    }
+
+    Invoke-Step "mainnet BTC 24h change drift" {
+        Assert-MonitorMajorChangeAgainstBinance -Symbol "BTCUSDT"
     }
 }
 

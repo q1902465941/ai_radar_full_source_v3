@@ -164,8 +164,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\verify_docker_stack.ps1
 ```
 
 The script waits for a fresh radar `last_scan_id`, verifies mainnet market
-source, compares BTC plus radar top samples against Binance USD-M Futures
-mainnet tickers, and then runs the controlled paper closed-loop acceptance.
+source, compares BTC price, BTC 24h percentage change, and radar top samples
+against Binance USD-M Futures mainnet tickers, and then runs the controlled
+paper closed-loop acceptance.
 
 Verify the controlled paper closed loop after the stack is healthy:
 

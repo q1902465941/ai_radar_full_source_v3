@@ -1,13 +1,16 @@
+import pytest
 from sqlalchemy import inspect, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
+import backend.app.db.session as session_module
 from backend.app.db.models import (
     BackgroundTaskRecord,
     Base,
     RadarCandidateRecord,
     RadarScanRecord,
 )
-from backend.app.db.session import build_engine, session_scope
+from backend.app.db.session import build_engine, init_db, session_scope
 
 
 def test_database_foundation_creates_task_tables(tmp_path):
@@ -31,6 +34,36 @@ def test_database_foundation_creates_task_tables(tmp_path):
         "direction",
         "raw_json",
     } <= candidate_columns
+
+
+def test_init_db_retries_when_sqlite_create_all_races(monkeypatch):
+    calls = []
+
+    def fake_create_all(bind, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise OperationalError(
+                "CREATE TABLE background_tasks",
+                {},
+                Exception("table background_tasks already exists"),
+            )
+
+    monkeypatch.setattr(Base.metadata, "create_all", fake_create_all)
+
+    init_db(session_module.engine)
+
+    assert len(calls) == 2
+    assert calls[1]["checkfirst"] is True
+
+
+def test_init_db_reraises_unrelated_operational_error(monkeypatch):
+    def fake_create_all(bind, **kwargs):
+        raise OperationalError("CREATE TABLE background_tasks", {}, Exception("disk is full"))
+
+    monkeypatch.setattr(Base.metadata, "create_all", fake_create_all)
+
+    with pytest.raises(OperationalError):
+        init_db(session_module.engine)
 
 
 def test_session_scope_commits_records(tmp_path):

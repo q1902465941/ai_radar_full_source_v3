@@ -1,6 +1,6 @@
 # Landing Status
 
-Last updated: 2026-07-05
+Last updated: 2026-07-06
 
 This document records the current evidence for landing
 `E:\ai_radar_full_source_v3`.
@@ -31,7 +31,7 @@ and `scripts/stop_local_stack.ps1`.
 
 Evidence from the latest local run:
 
-- Backend tests: `360 passed`
+- Backend tests: `365 passed`
 - Frontend tests: `5 files / 8 tests passed`
 - Frontend production build: passed
 - Backend smoke: `/api/v2/health` returned service `ai-radar-api`
@@ -116,7 +116,7 @@ $env:NGINX_IMAGE='docker.m.daocloud.io/library/nginx:1.29-alpine'
 docker compose up --build -d
 ```
 
-Docker Compose evidence from 2026-07-05 after restoring the detailed
+Docker Compose evidence from 2026-07-06 after restoring the detailed
 monitoring site as the default browser surface and fixing mainnet market data:
 
 - `docker compose up --build -d`: completed.
@@ -124,6 +124,9 @@ monitoring site as the default browser surface and fixing mainnet market data:
   running `backend.main:app`.
 - v2 API container: `healthy`, published `0.0.0.0:8002->8002/tcp`,
   running `backend.app.main:app`.
+- v2 API multi-worker startup: SQLite `create_all` now tolerates the
+  concurrent `table already exists` race seen when both gunicorn workers boot
+  at the same time.
 - Frontend container: `healthy`, published `0.0.0.0:8080->80/tcp`.
 - Backend smoke: `http://127.0.0.1:8080/api/state` returned market state.
 - v2 API smoke: `http://127.0.0.1:8002/api/v2/health` returned
@@ -137,9 +140,15 @@ monitoring site as the default browser surface and fixing mainnet market data:
 - Market data: `/api/state` reported `market_data_source=mainnet`; monitored
   BTC price drift versus Binance USD-M Futures mainnet public ticker stayed
   within the verification threshold.
+- Major-market details: `/api/state` now exposes `change_24h`,
+  `change_source=ws_ticker_24h`, bid/ask, price age, and 24h quote volume for
+  the topbar market cards. Browser evidence showed BTC/ETH/BNB/SOL rendering
+  visible `24h` percentage changes instead of silent `0%` values.
 - Radar pricing: `scripts/verify_docker_stack.ps1` now waits for a fresh
   `last_scan_id` before accepting `/api/radar`, then checks the first radar
   symbols against Binance mainnet ticker data with a 1% default drift limit.
+  It also checks BTC 24h percentage-change drift against Binance with a 0.25
+  percentage-point default limit.
 - WebSocket ticker source: all-market ticker uses the Binance USD-M Futures
   `/market/ws/!ticker@arr` routed path. Runtime evidence after rebuild showed
   `refresh_source=ws_ticker`, ticker count above 600, `stale=false`, and no
@@ -159,7 +168,7 @@ REQUIRE_CODEX_STRATEGY_FOR_ENTRY=false
 LIVE_TRADING_ENABLED=false
 ```
 
-Evidence from 2026-07-05:
+Evidence from 2026-07-06:
 
 - `/api/system/readiness` status: `DEGRADED`, not `BLOCKED`.
 - Codex entry gate: `required_for_entry=false`.

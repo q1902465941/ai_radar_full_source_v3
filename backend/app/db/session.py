@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from sqlalchemy import Engine, create_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.config import settings
@@ -26,7 +27,23 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 def init_db(bind: Engine | None = None) -> None:
     from backend.app.db.models import Base
 
-    Base.metadata.create_all(bind or engine)
+    target = bind or engine
+    try:
+        Base.metadata.create_all(target)
+    except OperationalError as exc:
+        if not _is_concurrent_create_all_exists(exc):
+            raise
+        Base.metadata.create_all(target, checkfirst=True)
+
+
+def _is_concurrent_create_all_exists(exc: OperationalError) -> bool:
+    parts = [str(exc)]
+    if getattr(exc, "orig", None) is not None:
+        parts.append(str(exc.orig))
+    if getattr(exc, "statement", None):
+        parts.append(str(exc.statement))
+    message = " ".join(parts).lower()
+    return "already exists" in message and "create table" in message
 
 
 @contextmanager

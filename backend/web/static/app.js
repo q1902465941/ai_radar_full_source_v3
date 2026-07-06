@@ -20,6 +20,12 @@ function cls(v) {
   return Number(v) >= 0 ? 'up' : 'down';
 }
 
+function finiteNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 function sideText(side) {
   if (side === 'SHORT') return '做空';
   if (side === 'LONG') return '做多';
@@ -198,11 +204,19 @@ async function refreshTop() {
   const majors = s.major || [];
   bar.innerHTML = `${majors.map((x) => {
     const hasPrice = Number(x.price || 0) > 0;
+    const changeValue = finiteNumber(x.change);
+    const changeLabel = x.change_label ? `${x.change_label} ` : '';
+    const changeText = changeValue === null ? '--' : `${changeLabel}${changeValue >= 0 ? '+' : ''}${fmt(changeValue, 2)}%`;
+    const titleParts = [
+      x.source ? `price=${x.source}` : '',
+      x.change_source ? `change=${x.change_source}` : '',
+      finiteNumber(x.price_age_seconds) !== null ? `age=${fmt(x.price_age_seconds, 1)}s` : '',
+    ].filter(Boolean).join(' | ');
     return `
-    <div class="ticker">
+    <div class="ticker" title="${escapeHtml(titleParts)}">
       <b>${escapeHtml(x.label || x.symbol || '--')}</b>
       <div class="price">${hasPrice ? fmt(x.price, x.price > 10 ? 2 : 5) : '--'}</div>
-      <span class="${hasPrice ? cls(x.change) : ''}">${hasPrice ? `${x.change >= 0 ? '+' : ''}${fmt(x.change, 2)}%` : '--'}</span>
+      <span class="${hasPrice && changeValue !== null ? cls(changeValue) : ''}">${hasPrice ? escapeHtml(changeText) : '--'}</span>
     </div>
   `;
   }).join('')}

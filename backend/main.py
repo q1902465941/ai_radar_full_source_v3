@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import json
+import math
 import threading
 from typing import Any
 from fastapi import FastAPI, Request
@@ -200,6 +201,30 @@ def _items_by_symbols(items: list[Any], symbols: list[str]) -> list[Any]:
     return [by_symbol[symbol] for symbol in symbols if symbol in by_symbol]
 
 
+def _optional_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _ws_ticker_rows_by_symbol(symbols: list[str]) -> dict[str, dict[str, Any]]:
+    wanted = {str(symbol or "").upper() for symbol in symbols if symbol}
+    rows: dict[str, dict[str, Any]] = {}
+    try:
+        ticker_rows = binance_ticker_stream.snapshot_rows()
+    except Exception:
+        return rows
+    for row in ticker_rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").upper()
+        if symbol in wanted:
+            rows[symbol] = row
+    return rows
+
+
 def _light_trade_director_status(
     *,
     candidate_source: str,
@@ -339,6 +364,7 @@ async def _state_major_rows() -> list[dict[str, Any]]:
         ("BNBUSDT", "BNB 永续"),
         ("SOLUSDT", "SOL 永续"),
     ]
+    ticker_rows = _ws_ticker_rows_by_symbol([sym for sym, _ in specs])
     quotes = await asyncio.gather(
         *(market_service.price_quote(sym) for sym, _ in specs),
         return_exceptions=True,
@@ -346,17 +372,41 @@ async def _state_major_rows() -> list[dict[str, Any]]:
     rows = []
     for (sym, label), quote in zip(specs, quotes):
         snapshot = market_service.last_snapshots.get(sym)
+        ticker_row = ticker_rows.get(sym) or {}
         quote_failed = isinstance(quote, Exception)
         quote_price = 0.0 if quote_failed else float(getattr(quote, "price", 0.0) or 0.0)
         snapshot_price = snapshot.price if snapshot and snapshot.price > 0 else 0.0
+        change_5m = _optional_float(getattr(snapshot, "change_5m", None)) if snapshot else None
+        change_24h = _optional_float(ticker_row.get("priceChangePercent"))
+        quote_volume_24h = _optional_float(ticker_row.get("quoteVolume"))
+        if change_5m is not None:
+            change = change_5m
+            change_source = "snapshot_5m"
+            change_label = "5m"
+        elif change_24h is not None:
+            change = change_24h
+            change_source = "ws_ticker_24h"
+            change_label = "24h"
+        else:
+            change = 0.0
+            change_source = "unavailable"
+            change_label = ""
         rows.append({
             "symbol": sym,
             "label": label,
             "price": quote_price if quote_price > 0 else snapshot_price,
-            "change": snapshot.change_5m if snapshot else 0,
+            "change": change,
+            "change_5m": change_5m,
+            "change_24h": change_24h,
+            "change_source": change_source,
+            "change_label": change_label,
+            "quote_volume_24h": quote_volume_24h,
             "source": "quote_error" if quote_failed else getattr(quote, "source", "snapshot_cache" if snapshot else "unavailable"),
             "stale": True if quote_failed else bool(getattr(quote, "stale", False)),
             "error": type(quote).__name__ if quote_failed else getattr(quote, "error", ""),
+            "bid": 0.0 if quote_failed else float(getattr(quote, "bid", 0.0) or 0.0),
+            "ask": 0.0 if quote_failed else float(getattr(quote, "ask", 0.0) or 0.0),
+            "price_age_seconds": 999999.0 if quote_failed else float(getattr(quote, "age_seconds", 999999.0) or 0.0),
         })
     return rows
 
