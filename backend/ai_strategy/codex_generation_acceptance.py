@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import Any
 
-from backend.ai_strategy.openai_strategy_client import openai_strategy_client
+from backend.ai_strategy.ai_service import ai_service
 from backend.ai_strategy.strategy_contract import contract_quality
 from backend.ai_strategy.strategy_validator import strategy_validator
 from backend.config import settings
@@ -290,14 +290,16 @@ async def run_acceptance() -> tuple[int, dict[str, Any]]:
     item = build_acceptance_item()
     context = build_acceptance_context(item)
     config_error = _config_error()
-    status = openai_strategy_client.status(candidate_count=1, candidate_source="production_acceptance")
+    status = ai_service.status(candidate_count=1, candidate_source="production_acceptance")
     codex_status = status.get("codex_cli") if isinstance(status.get("codex_cli"), dict) else {}
     if config_error:
         return _fail(config_error, status=status)
     if not codex_status.get("ready_for_generation"):
         return _fail(str(codex_status.get("availability_reason") or "codex_not_ready"), status=status)
 
-    plan = await openai_strategy_client.generate(item, context)
+    plan = await ai_service.generate_strategy(item, context)
+    post_status = ai_service.status(candidate_count=1, candidate_source="production_acceptance")
+    audit = post_status.get("audit") if isinstance(post_status.get("audit"), dict) else {}
     validator_ok, validator_reason = strategy_validator.validate(plan)
     contract = plan.raw.get("strategy_contract") if isinstance(plan.raw, dict) else None
     contract_ok, contract_reasons = contract_quality(contract if isinstance(contract, dict) else None)
@@ -326,8 +328,13 @@ async def run_acceptance() -> tuple[int, dict[str, Any]]:
         failures.append("strategy_contract_quality_not_ok")
     if isinstance(allowed_stages, dict) and allowed_stages.get("live") is True:
         failures.append("live_stage_enabled_without_explicit_approval")
+    if int(audit.get("tradable_strategy_count") or 0) < 1:
+        failures.append("ai_task_audit_missing_tradable_strategy")
+    last_tradable = audit.get("last_tradable_strategy") if isinstance(audit.get("last_tradable_strategy"), dict) else {}
+    if last_tradable.get("action") != EXPECTED_ACTION:
+        failures.append(f"ai_task_audit_last_tradable_not_{EXPECTED_ACTION}:{last_tradable.get('action') or 'missing'}")
     if failures:
-        return _fail("codex_strategy_generation_failed", failures=failures, status=status, plan=plan)
+        return _fail("codex_strategy_generation_failed", failures=failures, status=post_status, plan=plan)
 
     return 0, {
         "ok": True,
@@ -350,6 +357,11 @@ async def run_acceptance() -> tuple[int, dict[str, Any]]:
         "contract_sections": sorted(contract.keys()) if isinstance(contract, dict) else [],
         "allowed_stages": allowed_stages,
         "codex_status": _compact_codex_status(codex_status),
+        "ai_task_audit": {
+            "tradable_strategy_count": audit.get("tradable_strategy_count"),
+            "invalid_strategy_count": audit.get("invalid_strategy_count"),
+            "last_tradable_strategy": last_tradable,
+        },
     }
 
 

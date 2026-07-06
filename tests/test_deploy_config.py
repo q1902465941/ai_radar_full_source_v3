@@ -95,6 +95,15 @@ def test_frontend_nginx_allows_long_running_api_calls():
     assert "proxy_send_timeout 300s;" in nginx
 
 
+def test_strategy_ai_page_surfaces_tradable_strategy_audit():
+    template = (ROOT / "backend" / "web" / "templates" / "strategy_ai.html").read_text(encoding="utf-8")
+
+    assert "tradable_strategy_count" in template
+    assert "invalid_strategy_count" in template
+    assert "last_tradable_strategy" in template
+    assert "recent_strategy_tasks" in template
+
+
 def test_env_example_defaults_to_mainnet_public_market_data():
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
 
@@ -155,10 +164,12 @@ def test_codex_strategy_generation_verification_script_runs_real_docker_codex_pa
     assert "-e REQUIRE_CODEX_STRATEGY_FOR_ENTRY=true" in script
     assert "python -m backend.ai_strategy.codex_generation_acceptance" in script
 
-    assert "openai_strategy_client.generate" in module
+    assert "ai_service.generate_strategy" in module
     assert "strategy_validator.validate" in module
     assert "contract_quality" in module
     assert "codex_real_strategy_generated" in module
+    assert "tradable_strategy_count" in module
+    assert "last_tradable_strategy" in module
     assert '"OPEN_LONG"' in module
     assert "codex_cli_unavailable" in module
     assert "strategy_contract_quality" in module

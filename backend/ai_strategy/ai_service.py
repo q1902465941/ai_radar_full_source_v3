@@ -4,10 +4,12 @@ from dataclasses import asdict, is_dataclass
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.ai_strategy.openai_strategy_client import openai_strategy_client
+from backend.ai_strategy.strategy_contract import contract_quality
+from backend.ai_strategy.strategy_validator import strategy_validator
 from backend.app.db.models import AITaskRecord, utc_now
 from backend.app.db.session import SessionLocal, session_scope
 from backend.models import StrategyPlan
@@ -24,7 +26,9 @@ class AIService:
         self._session_factory = session_factory or SessionLocal
 
     async def generate_strategy(self, item: Any, position_context: dict | None = None) -> StrategyPlan:
-        status = self.status(candidate_count=1, candidate_source=str((position_context or {}).get("source") or ""))
+        position_context = dict(position_context or {})
+        candidate_source = _candidate_source(position_context)
+        status = self.status(candidate_count=1, candidate_source=candidate_source)
         provider = str(status.get("provider") or "")
         model = _model_from_status(status, provider)
         row = self._create_task(
@@ -36,7 +40,8 @@ class AIService:
                 "direction": getattr(item, "direction", ""),
                 "price": getattr(item, "price", 0),
                 "score": getattr(item, "score", 0),
-                "position_context": dict(position_context or {}),
+                "candidate_source": candidate_source,
+                "position_context": position_context,
             },
         )
         try:
@@ -49,12 +54,7 @@ class AIService:
         self._mark_succeeded(
             row.task_id,
             output=plan_json,
-            validation={
-                "valid": True,
-                "action": plan.action,
-                "symbol": plan.symbol,
-                "side": plan.side,
-            },
+            validation=_strategy_validation_payload(plan),
         )
         return plan
 
@@ -118,13 +118,39 @@ class AIService:
                 failed = session.execute(
                     select(func.count(AITaskRecord.id)).where(AITaskRecord.state == "failed")
                 ).scalar_one()
+                rows = (
+                    session.execute(select(AITaskRecord).order_by(desc(AITaskRecord.id)).limit(50))
+                    .scalars()
+                    .all()
+                )
+                validation_values = (
+                    session.execute(
+                        select(AITaskRecord.validation_json).where(AITaskRecord.state == "succeeded")
+                    )
+                    .scalars()
+                    .all()
+                )
         except Exception as exc:
             return {"ai_tasks_table": False, "error": f"{type(exc).__name__}:{exc}"}
+        validation_rows = [
+            row
+            for row in validation_values
+            if isinstance(row, dict)
+        ]
+        recent = [_audit_task_snapshot(row) for row in rows[:10]]
+        last_tradable = next((row for row in recent if row.get("tradable_strategy")), {})
         return {
             "ai_tasks_table": True,
             "total": int(total or 0),
             "succeeded": int(succeeded or 0),
             "failed": int(failed or 0),
+            "tradable_strategy_count": sum(1 for row in validation_rows if row.get("tradable_strategy") is True),
+            "non_tradable_strategy_count": sum(1 for row in validation_rows if row.get("tradable_strategy") is not True),
+            "invalid_strategy_count": sum(1 for row in validation_rows if row.get("valid") is False),
+            "open_strategy_count": sum(1 for row in validation_rows if row.get("opens") is True),
+            "wait_strategy_count": sum(1 for row in validation_rows if row.get("action") == "WAIT"),
+            "last_tradable_strategy": last_tradable,
+            "recent_strategy_tasks": recent,
         }
 
 
@@ -133,6 +159,56 @@ def _model_from_status(status: dict[str, Any], provider: str) -> str:
     if isinstance(provider_status, dict):
         return str(provider_status.get("model") or provider_status.get("last_model") or "")
     return str(status.get("model") or "")
+
+
+def _candidate_source(position_context: dict[str, Any]) -> str:
+    selection = position_context.get("candidate_selection")
+    if isinstance(selection, dict) and selection.get("source"):
+        return str(selection.get("source") or "")
+    return str(position_context.get("source") or "")
+
+
+def _strategy_validation_payload(plan: StrategyPlan) -> dict[str, Any]:
+    validator_ok, validator_reason = strategy_validator.validate(plan)
+    raw = plan.raw if isinstance(plan.raw, dict) else {}
+    provider = str(raw.get("provider") or "").strip().lower()
+    contract = raw.get("strategy_contract") if isinstance(raw.get("strategy_contract"), dict) else None
+    contract_ok, contract_reasons = contract_quality(contract)
+    opens = bool(validator_ok and plan.action in {"OPEN_LONG", "OPEN_SHORT"})
+    provider_available = bool(provider) and not provider.endswith("_unavailable")
+    return {
+        "valid": bool(validator_ok),
+        "validator_reason": validator_reason,
+        "action": plan.action,
+        "symbol": plan.symbol,
+        "side": plan.side,
+        "provider": provider,
+        "opens": opens,
+        "tradable_strategy": bool(opens and provider_available),
+        "contract_quality_ok": bool(contract_ok),
+        "contract_quality_reasons": contract_reasons[:8],
+        "strategy_contract_quality": raw.get("strategy_contract_quality") if isinstance(raw.get("strategy_contract_quality"), dict) else {},
+    }
+
+
+def _audit_task_snapshot(row: AITaskRecord) -> dict[str, Any]:
+    validation = row.validation_json if isinstance(row.validation_json, dict) else {}
+    output = row.output_json if isinstance(row.output_json, dict) else {}
+    return {
+        "task_id": row.task_id,
+        "state": row.state,
+        "provider": validation.get("provider") or row.provider,
+        "model": row.model,
+        "action": validation.get("action") or output.get("action"),
+        "symbol": validation.get("symbol") or output.get("symbol"),
+        "side": validation.get("side") or output.get("side"),
+        "valid": validation.get("valid"),
+        "validator_reason": validation.get("validator_reason"),
+        "opens": validation.get("opens"),
+        "tradable_strategy": validation.get("tradable_strategy"),
+        "contract_quality_ok": validation.get("contract_quality_ok"),
+        "error": row.error,
+    }
 
 
 def _jsonable_dataclass(value: Any) -> dict[str, Any]:
