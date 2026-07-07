@@ -96,6 +96,14 @@ function Write-LearningCountability($Target) {
     Assert-True ($countability.will_count_when_closed -eq $true) "watch refused: Codex position is not countable when closed; blocking_reasons=$blocking"
 }
 
+function Write-Continuation($Probe) {
+    $continuation = $Probe.continuation
+    Assert-True ($null -ne $continuation) "watch refused: continuation evidence is unavailable; rerun after backend exposes sampling continuation evidence"
+    $blocking = Join-Values $continuation.blocking_reasons
+    Write-Host "continuation auto_loop_enabled=$($continuation.auto_loop_enabled) loop_start_guard_ok=$($continuation.loop_start_guard_ok) loop_start_guard_reason=$($continuation.loop_start_guard_reason) capacity_full_now=$($continuation.capacity_full_now) will_try_after_close=$($continuation.will_try_after_close) next_trigger=$($continuation.next_trigger) blocking_reasons=$blocking"
+    Write-Host "continuation intervals scan=$($continuation.scan_interval_seconds)s position_manage=$($continuation.position_manage_interval_seconds)s max_open_positions=$($continuation.max_open_positions) open_positions=$($continuation.open_positions)"
+}
+
 $maxWait = [Math]::Max(0, $MaxWaitSeconds)
 $poll = [Math]::Max(1, $PollSeconds)
 
@@ -113,6 +121,7 @@ $pendingClose = $probe.sampling_status -eq "OPEN_POSITION_PENDING_CLOSE"
 $positionId = [string]$target.position_id
 Write-Host "watching position_id=$positionId symbol=$($target.symbol) side=$($target.side) sampling_status=$($probe.sampling_status) pending_close=$pendingClose initial_codex_real_closed_samples_with_radar=$initialCodexClosed"
 Write-LearningCountability $target
+Write-Continuation $probe
 
 $deadline = (Get-Date).AddSeconds($maxWait)
 while ($true) {

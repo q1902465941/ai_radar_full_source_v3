@@ -98,7 +98,11 @@ class BinanceRestCompat:
                 await self._testnet_client.aclose()
             except Exception:
                 pass
-        self._testnet_client = httpx.AsyncClient(timeout=binance_http_timeout(), limits=binance_http_limits())
+        self._testnet_client = httpx.AsyncClient(
+            timeout=binance_http_timeout(),
+            limits=binance_http_limits(),
+            trust_env=False,
+        )
         self._testnet_client_loop_id = loop_id
         return self._testnet_client
 

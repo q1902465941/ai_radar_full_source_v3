@@ -81,10 +81,11 @@ class BinanceFuturesClient:
         request_params = self._sign(params or {}) if signed else (params or {})
         headers = self._headers() if signed else None
         client = await self._client(signed=signed)
+        url = self.base_url + path
         try:
-            response = await client.request(method, self.base_url + path, params=request_params, headers=headers)
+            response = await client.request(method, url, params=request_params, headers=headers)
         except httpx.HTTPError as exc:
-            raise RuntimeError(redact_sensitive_url(str(exc))) from exc
+            raise RuntimeError(_http_error_detail(exc, url)) from exc
         if response.status_code >= 400:
             try:
                 payload = response.json()
@@ -94,9 +95,9 @@ class BinanceFuturesClient:
                 await self.sync_server_time(force=True)
                 request_params = self._sign(params or {})
                 try:
-                    response = await client.request(method, self.base_url + path, params=request_params, headers=headers)
+                    response = await client.request(method, url, params=request_params, headers=headers)
                 except httpx.HTTPError as exc:
-                    raise RuntimeError(redact_sensitive_url(str(exc))) from exc
+                    raise RuntimeError(_http_error_detail(exc, url)) from exc
                 if response.status_code < 400:
                     if not response.text.strip():
                         return None
@@ -129,6 +130,7 @@ class BinanceFuturesClient:
             self._signed_client = httpx.AsyncClient(
                 timeout=binance_signed_http_timeout(),
                 limits=binance_signed_http_limits(),
+                trust_env=False,
             )
             self._signed_client_loop_id = loop_id
             return self._signed_client
@@ -143,6 +145,7 @@ class BinanceFuturesClient:
         self._public_client = httpx.AsyncClient(
             timeout=binance_http_timeout(),
             limits=binance_http_limits(),
+            trust_env=False,
         )
         self._public_client_loop_id = loop_id
         return self._public_client
@@ -428,6 +431,13 @@ class BinanceFuturesClient:
             "min_notional": float(min_notional),
             "step_size": str(step_size),
         }
+
+
+def _http_error_detail(exc: httpx.HTTPError, url: str) -> str:
+    message = redact_sensitive_url(str(exc)).strip()
+    if message:
+        return f"{type(exc).__name__}:{message}"
+    return f"{type(exc).__name__}:{redact_sensitive_url(url)}"
 
 
 binance_futures = BinanceFuturesClient()

@@ -68,6 +68,8 @@ class LearningDataAudit:
         elif not market_backtest_passed:
             reasons.append("market_backtest_not_passing")
             reasons.extend(market_backtest.get("quality_blockers") or [])
+        if not bool(radar.get("ok", True)):
+            reasons.append("radar_snapshot_audit_unavailable")
         if evidence_span_days < min_radar_days:
             reasons.append("radar_history_short")
 
@@ -177,22 +179,35 @@ class LearningDataAudit:
         }
 
     def _radar_summary(self) -> dict[str, Any]:
-        with db.conn() as conn:
-            row = conn.execute(
-                """
-                SELECT
-                    COUNT(*) AS rows,
-                    COUNT(DISTINCT scan_id) AS scans,
-                    COUNT(DISTINCT symbol) AS symbols,
-                    MIN(ts_ms) AS min_ts,
-                    MAX(ts_ms) AS max_ts
-                FROM radar_snapshots
-                """
-            ).fetchone()
+        try:
+            with db.conn() as conn:
+                row = conn.execute(
+                    """
+                    SELECT
+                        COUNT(*) AS rows,
+                        COUNT(DISTINCT scan_id) AS scans,
+                        COUNT(DISTINCT symbol) AS symbols,
+                        MIN(ts_ms) AS min_ts,
+                        MAX(ts_ms) AS max_ts
+                    FROM radar_snapshots
+                    """
+                ).fetchone()
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": f"{type(exc).__name__}:{exc}",
+                "rows": 0,
+                "distinct_scans": 0,
+                "distinct_symbols": 0,
+                "min_ts_ms": 0,
+                "max_ts_ms": 0,
+                "span_days": 0.0,
+            }
         min_ts = int(row["min_ts"] or 0)
         max_ts = int(row["max_ts"] or 0)
         span_ms = max(0, max_ts - min_ts)
         return {
+            "ok": True,
             "rows": int(row["rows"] or 0),
             "distinct_scans": int(row["scans"] or 0),
             "distinct_symbols": int(row["symbols"] or 0),
@@ -202,21 +217,26 @@ class LearningDataAudit:
         }
 
     def _market_backtest_summary(self) -> dict[str, Any]:
-        with db.conn() as conn:
-            table_rows = conn.execute(
-                """
-                SELECT name FROM sqlite_master
-                WHERE type='table'
-                  AND (
-                    lower(name) LIKE '%candle%'
-                    OR lower(name) LIKE '%kline%'
-                    OR lower(name) LIKE '%ohlc%'
-                    OR lower(name) LIKE '%backtest%'
-                  )
-                ORDER BY name
-                """
-            ).fetchall()
-        tables = [str(row["name"]) for row in table_rows]
+        table_error = ""
+        try:
+            with db.conn() as conn:
+                table_rows = conn.execute(
+                    """
+                    SELECT name FROM sqlite_master
+                    WHERE type='table'
+                      AND (
+                        lower(name) LIKE '%candle%'
+                        OR lower(name) LIKE '%kline%'
+                        OR lower(name) LIKE '%ohlc%'
+                        OR lower(name) LIKE '%backtest%'
+                      )
+                    ORDER BY name
+                    """
+                ).fetchall()
+            tables = [str(row["name"]) for row in table_rows]
+        except Exception as exc:
+            tables = []
+            table_error = f"{type(exc).__name__}:{exc}"
         root = Path(__file__).resolve().parents[2]
         reports_dir = root / "trading_lab" / "reports"
         reports = [
@@ -257,6 +277,7 @@ class LearningDataAudit:
             "by_side_metrics": quality.get("by_side_metrics") or {},
             "side_blocks": quality.get("side_blocks") or [],
             "candle_or_backtest_tables": tables[:10],
+            "candle_or_backtest_table_error": table_error,
             "research_reports": reports[:10],
             "jesse_research_enabled": bool(settings.jesse_research_enabled),
             "jesse_installed": jesse_installed,

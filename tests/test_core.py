@@ -59,6 +59,7 @@ import logging
 import sqlite3
 import subprocess
 import threading
+import httpx
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
@@ -1387,6 +1388,48 @@ def test_binance_public_http_timeout_allows_slow_market_row_endpoints(monkeypatc
 
     assert timeout.read >= 10.0
 
+
+def test_binance_http_clients_ignore_system_proxy_environment(monkeypatch):
+    from backend.exchange.binance_futures import BinanceFuturesClient
+
+    calls = []
+
+    class FakeAsyncClient:
+        pass
+
+    def fake_async_client(**kwargs):
+        calls.append(kwargs)
+        return FakeAsyncClient()
+
+    monkeypatch.setattr("backend.exchange.binance_futures.httpx.AsyncClient", fake_async_client)
+    client = BinanceFuturesClient()
+
+    asyncio.run(client._client(signed=False))
+    asyncio.run(client._client(signed=True))
+
+    assert calls[0]["trust_env"] is False
+    assert calls[1]["trust_env"] is False
+
+
+def test_binance_public_get_preserves_empty_connect_error_endpoint(monkeypatch):
+    from backend.exchange.binance_futures import BinanceFuturesClient
+
+    class FailingClient:
+        async def request(self, method, url, params=None, headers=None):
+            raise httpx.ConnectError("", request=httpx.Request(method, url))
+
+    async def fake_client(*, signed=False):
+        return FailingClient()
+
+    client = BinanceFuturesClient()
+    monkeypatch.setattr(client, "_client", fake_client)
+
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(client.public_get("/fapi/v1/ticker/24hr"))
+
+    assert str(exc.value) == "ConnectError:https://fapi.binance.com/fapi/v1/ticker/24hr"
+
+
 def test_market_service_uses_book_ticker_for_position_valuation(monkeypatch):
     monkeypatch.setattr(settings, "market_data_mode", "binance")
 
@@ -2116,6 +2159,25 @@ def test_universal_anomaly_auto_trainer_defaults_to_recent_training_window():
 
     assert cfg["train_limit"] == 2500
     assert cfg["max_samples"] >= cfg["train_limit"]
+
+
+def test_universal_anomaly_auto_trainer_status_reports_summary_error():
+    class BrokenTraining:
+        def summary(self):
+            raise sqlite3.DatabaseError("database disk image is malformed")
+
+    class FakeTrainer:
+        def status(self):
+            return {"runtime": {"active": True, "engine": "mlp"}}
+
+    auto = UniversalAnomalyAutoTrainer(training=BrokenTraining(), trainer=FakeTrainer())
+
+    status = auto.status()
+
+    assert status["training_summary"]["ok"] is False
+    assert status["training_summary"]["old_model_kept"] is True
+    assert status["training_summary"]["error"] == "DatabaseError:database disk image is malformed"
+    assert status["trainer"]["runtime"]["active"] is True
 
 
 def test_universal_anomaly_auto_trainer_trains_lightgbm_when_gate_passes(tmp_path):
@@ -3941,6 +4003,43 @@ def test_learning_data_audit_counts_only_learning_closed_trades(monkeypatch):
     assert report["sources"]["closed_trades_total"] == 1
     assert report["sources"]["raw_closed_trades_total"] == 2
     assert report["sources"]["excluded_closed_trades"] == 1
+
+
+def test_learning_data_audit_degrades_when_radar_summary_query_fails(monkeypatch):
+    learning_data_audit.clear_cache()
+
+    class BrokenConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, *args, **kwargs):
+            raise sqlite3.DatabaseError("database disk image is malformed")
+
+    with monkeypatch.context() as m:
+        m.setattr(settings, "replay_enabled", False)
+        m.setattr(trade_memory, "samples", lambda limit=10000, require_radar=True: [])
+        m.setattr(db, "list_closed", lambda limit=100000: [])
+        m.setattr(db, "conn", lambda: BrokenConnection())
+        m.setattr(db, "get_kv", lambda key, default=None: default)
+        m.setattr(
+            learning_data_audit,
+            "_market_backtest_summary",
+            lambda: {
+                "available": False,
+                "quality_passed": False,
+                "missing_reasons": ["market_backtest_report_missing"],
+            },
+        )
+
+        report = learning_data_audit.summary(force=True)
+
+    assert report["production_grade"] is False
+    assert "radar_snapshot_audit_unavailable" in report["reasons"]
+    assert report["radar_snapshots"]["ok"] is False
+    assert report["radar_snapshots"]["error"] == "DatabaseError:database disk image is malformed"
 
 
 def test_learning_data_audit_exposes_closed_sample_provider_breakdown(monkeypatch):
@@ -6421,6 +6520,9 @@ def test_paper_top_ai_open_creates_paper_validation_position(monkeypatch):
     item.score = 74
     item.fund_confirm_count = 3
     item.wick_ratio = 0.42
+    monkeypatch.setattr(settings, "ai_enabled", True)
+    monkeypatch.setattr(settings, "ai_strategy_provider", "codex_cli")
+    monkeypatch.setattr(settings, "require_codex_strategy_for_entry", True)
     monkeypatch.setattr(settings, "trade_mode", "live")
     monkeypatch.setattr(settings, "live_trading_enabled", False)
     monkeypatch.setattr(settings, "auto_trading_candidate_mode", "paper_top")
@@ -6430,15 +6532,83 @@ def test_paper_top_ai_open_creates_paper_validation_position(monkeypatch):
     monkeypatch.setattr(settings, "paper_account_equity_usdt", 1000.0)
     monkeypatch.setattr(settings, "trade_min_net_profit_usdt", 0.2)
     monkeypatch.setattr(settings, "trade_min_profit_cost_ratio", 1.0)
+    monkeypatch.setattr(settings, "auto_trading_use_performance_guard", False)
     monkeypatch.setattr(radar_engine, "top50", [item])
+    monkeypatch.setattr(autotrader, "_loss_streak", lambda: 0)
     async def fake_scan(force_refresh=False):
         return radar_engine.top50
     monkeypatch.setattr(radar_engine, "scan", fake_scan)
     monkeypatch.setattr(strategy_registry, "active", lambda: None)
     monkeypatch.setattr(performance_guard, "summary", lambda: {"recovery_mode": False, "pnl": 0, "trades": 0, "win_rate": 0, "recent_win_rate": 0, "loss_streak": 0})
+    monkeypatch.setattr(
+        "backend.ai_strategy.dynamic_trade_model.strategy_quality_gate.evaluate",
+        lambda *args, **kwargs: SimpleNamespace(
+            paper_ok=True,
+            live_ok=True,
+            tp1_r=1.0,
+            tp2_r=3.0,
+            avg_reward_r=2.0,
+            cost_r=0.12,
+            estimated_win_rate=0.62,
+            expected_r=0.38,
+            reasons=[],
+            calibrated_win_rate=0.62,
+            calibration={"paper_ok": True, "live_ok": True},
+            attribution={"paper_ok": True, "live_ok": True},
+            geometry_sample={},
+            asdict=lambda: {
+                "paper_ok": True,
+                "live_ok": True,
+                "tp1_r": 1.0,
+                "tp2_r": 3.0,
+                "avg_reward_r": 2.0,
+                "cost_r": 0.12,
+                "estimated_win_rate": 0.62,
+                "expected_r": 0.38,
+                "reasons": [],
+                "calibrated_win_rate": 0.62,
+                "calibration": {"paper_ok": True, "live_ok": True},
+                "attribution": {"paper_ok": True, "live_ok": True},
+                "geometry_sample": {},
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.ai_strategy.dynamic_trade_model.learned_risk_guard.evaluate",
+        lambda *args, **kwargs: SimpleNamespace(
+            allow_paper=True,
+            allow_live=True,
+            reasons=[],
+            matched_samples=30,
+            win_rate=0.62,
+            profit_factor=1.35,
+            pnl=5.0,
+            asdict=lambda: {
+                "allow_paper": True,
+                "allow_live": True,
+                "reasons": [],
+                "matched_samples": 30,
+                "win_rate": 0.62,
+                "profit_factor": 1.35,
+                "pnl": 5.0,
+            },
+        ),
+    )
 
     async def fake_price(symbol_arg):
         return item.price
+
+    async def fake_price_quote(symbol_arg, side_arg="LONG"):
+        return PriceQuote(
+            symbol=symbol_arg,
+            price=item.price,
+            source="book_ticker_bid_open_long",
+            bid=item.price,
+            ask=item.price,
+            ts_ms=now_ms(),
+            age_seconds=0.0,
+            stale=False,
+        )
 
     async def fake_generate(review_item, position_context=None):
         plan = rule_strategy_generator.generate_probe(review_item)
@@ -6446,7 +6616,9 @@ def test_paper_top_ai_open_creates_paper_validation_position(monkeypatch):
         return plan
 
     monkeypatch.setattr(market_service, "price_for", fake_price)
+    monkeypatch.setattr(market_service, "price_quote", fake_price_quote)
     monkeypatch.setattr("backend.trading.autotrader.openai_strategy_client.generate", fake_generate)
+    monkeypatch.setattr(ai_service._strategy_client, "generate", fake_generate)
     original_decide = auto_trading_risk_model.decide
 
     def assert_validation_not_probe(review_item, plan, account, market, paper_probe=False):
@@ -7320,6 +7492,8 @@ def test_ai_trade_director_codex_paper_probe_reports_pending_codex_position_when
     monkeypatch.setattr(settings, "trade_mode", "live")
     monkeypatch.setattr(settings, "live_trading_enabled", False)
     monkeypatch.setattr(settings, "live_use_test_order", True)
+    monkeypatch.setattr(settings, "max_open_positions", 1)
+    monkeypatch.setattr(autotrader, "enabled", True)
     monkeypatch.setattr(radar_engine, "top50", [item])
     monkeypatch.setattr(autotrader, "_market_data_ok", lambda: (True, ""))
     monkeypatch.setattr(autotrader, "_market_data_health", lambda: {"market_refresh_degraded": False, "market_snapshot_count": 120})
@@ -7393,6 +7567,13 @@ def test_ai_trade_director_codex_paper_probe_reports_pending_codex_position_when
     assert "MAX_HOLD_TIMEOUT" in countability["countable_close_reasons"]
     assert "PRICE_SOURCE_STALE_RECONCILE" in countability["excluded_close_reasons"]
     assert countability["blocking_reasons"] == []
+    continuation = out["continuation"]
+    assert continuation["auto_loop_enabled"] is True
+    assert continuation["loop_start_guard_ok"] is True
+    assert continuation["capacity_full_now"] is True
+    assert continuation["will_try_after_close"] is True
+    assert continuation["max_open_positions"] >= 1
+    assert continuation["next_trigger"] == "background_loop_run_once_after_capacity_frees"
     assert out["next_action"] == "wait_for_position_manager_close_to_create_codex_closed_sample"
 
 

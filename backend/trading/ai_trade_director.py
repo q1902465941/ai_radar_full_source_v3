@@ -95,6 +95,11 @@ class AITradeDirector:
             "codex_invocation": self._codex_invocation_delta(ai_before, ai_after),
             "decision_path": decision_path,
             "open_positions": open_positions,
+            "continuation": self._codex_sampling_continuation(
+                safety=safety,
+                ai_status=ai_after,
+                open_positions=open_positions,
+            ),
             "graduation": self._graduation_progress(),
             "market_data": autotrader._market_data_health(),
             "performance": performance,
@@ -382,6 +387,11 @@ class AITradeDirector:
                 for row in open_positions
             ],
             "open_positions": open_positions,
+            "continuation": self._codex_sampling_continuation(
+                safety=safety,
+                ai_status=ai_status,
+                open_positions=open_positions,
+            ),
             "graduation": self._graduation_progress(),
             "market_data": autotrader._market_data_health(),
             "performance": performance,
@@ -414,6 +424,94 @@ class AITradeDirector:
             "last_symbol": str(codex.get("last_symbol") or ""),
             "last_action": str(codex.get("last_action") or ""),
         }
+
+    def _codex_sampling_continuation(
+        self,
+        *,
+        safety: dict[str, Any],
+        ai_status: dict[str, Any],
+        open_positions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        loop_ok, loop_reason, loop_performance = autotrader.loop_start_guard()
+        open_count = len(position_registry.list_open())
+        max_open = int(settings.max_open_positions or 0)
+        capacity_full_now = bool(max_open > 0 and open_count >= max_open)
+        provider = str(ai_status.get("provider") or "")
+        codex = ai_status.get("codex_cli") if isinstance(ai_status.get("codex_cli"), dict) else {}
+        codex_ready = bool(codex.get("ready_for_generation"))
+        entry_required = bool(settings.require_codex_strategy_for_entry)
+        will_try_after_close = bool(
+            autotrader.enabled
+            and loop_ok
+            and not bool(safety.get("real_order_allowed"))
+            and settings.ai_enabled
+            and provider == "codex_cli"
+            and codex_ready
+            and entry_required
+            and max_open > 0
+            and open_positions
+        )
+        return {
+            "auto_loop_enabled": bool(autotrader.enabled),
+            "loop_start_guard_ok": bool(loop_ok),
+            "loop_start_guard_reason": str(loop_reason or ""),
+            "loop_performance": loop_performance,
+            "scan_interval_seconds": int(settings.scan_interval_seconds or 0),
+            "position_manage_interval_seconds": int(settings.position_manage_interval_seconds or 0),
+            "max_open_positions": max_open,
+            "open_positions": open_count,
+            "capacity_full_now": capacity_full_now,
+            "provider": provider,
+            "codex_ready_for_generation": codex_ready,
+            "codex_required_for_entry": entry_required,
+            "will_try_after_close": will_try_after_close,
+            "next_trigger": (
+                "background_loop_run_once_after_capacity_frees"
+                if will_try_after_close
+                else "manual_probe_or_fix_continuation_blocker"
+            ),
+            "blocking_reasons": self._codex_continuation_blockers(
+                safety=safety,
+                loop_ok=bool(loop_ok),
+                provider=provider,
+                codex_ready=codex_ready,
+                entry_required=entry_required,
+                max_open=max_open,
+                open_positions=open_positions,
+            ),
+        }
+
+    def _codex_continuation_blockers(
+        self,
+        *,
+        safety: dict[str, Any],
+        loop_ok: bool,
+        provider: str,
+        codex_ready: bool,
+        entry_required: bool,
+        max_open: int,
+        open_positions: list[dict[str, Any]],
+    ) -> list[str]:
+        reasons: list[str] = []
+        if not autotrader.enabled:
+            reasons.append("auto_loop_disabled")
+        if not loop_ok:
+            reasons.append("loop_start_guard_blocked")
+        if bool(safety.get("real_order_allowed")):
+            reasons.append("real_order_allowed")
+        if not settings.ai_enabled:
+            reasons.append("ai_disabled")
+        if provider != "codex_cli":
+            reasons.append(f"provider_not_codex_cli:{provider or 'missing'}")
+        if not codex_ready:
+            reasons.append("codex_not_ready")
+        if not entry_required:
+            reasons.append("codex_not_required_for_entry")
+        if max_open <= 0:
+            reasons.append("max_open_positions_not_positive")
+        if not open_positions:
+            reasons.append("no_codex_sample_to_continue_after")
+        return reasons
 
     def _codex_open_positions(self) -> list[dict[str, Any]]:
         out = []

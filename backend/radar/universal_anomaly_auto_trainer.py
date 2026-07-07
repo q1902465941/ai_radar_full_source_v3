@@ -152,10 +152,21 @@ class UniversalAnomalyAutoTrainer:
         return {
             "state": self._load_state(),
             "last_result": self.last_result,
-            "training_summary": self.training.summary(),
+            "training_summary": self._status_training_summary(),
             "trainer": self.trainer.status(),
             "config": self._config(),
         }
+
+    def _status_training_summary(self) -> dict[str, Any]:
+        try:
+            return self.training.summary()
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": f"{type(exc).__name__}:{exc}",
+                "old_model_kept": True,
+                "ts_ms": now_ms(),
+            }
 
     def run_loop(
         self,
