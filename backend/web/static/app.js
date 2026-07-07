@@ -853,6 +853,153 @@ function renderSystemReadiness(data) {
   }
 }
 
+function acceptanceStageClass(stage) {
+  if (!stage) return 'wait';
+  return stage.ok ? 'green' : 'red';
+}
+
+function productionAcceptanceStage(data, name) {
+  return (data.stages || []).find((stage) => stage && stage.name === name) || null;
+}
+
+function productionAcceptanceFirstAttempt(data) {
+  const aiStage = productionAcceptanceStage(data, 'ai_strategy_plan');
+  const evidence = aiStage && aiStage.evidence ? aiStage.evidence : {};
+  const attempts = Array.isArray(evidence.plan_attempts) ? evidence.plan_attempts : [];
+  return attempts[0] || null;
+}
+
+function productionAcceptanceStatus(data) {
+  if (data.ok) return 'PASS';
+  const blocked = data.result && data.result.blocked ? String(data.result.blocked) : '';
+  if (!blocked || blocked === 'not_run') return 'NOT RUN';
+  if (blocked.includes('not_open') || blocked.includes('no_strict')) return 'WAIT';
+  return 'BLOCKED';
+}
+
+function acceptanceSummaryCard(label, value, klass = '') {
+  return `<div class="summary-card readiness-card ${klass}"><span>${escapeHtml(label)}</span><b>${escapeHtml(value || '--')}</b></div>`;
+}
+
+function acceptanceMetric(label, value, klass = '') {
+  return `<div class="acceptance-metric ${klass}"><span>${escapeHtml(label)}</span><b>${escapeHtml(value || '--')}</b></div>`;
+}
+
+function renderProductionAcceptance(data) {
+  const summary = document.getElementById('productionAcceptanceSummary');
+  const stagesEl = document.getElementById('productionAcceptanceStages');
+  const detailEl = document.getElementById('productionAcceptanceDetail');
+  if (!summary && !stagesEl && !detailEl) return;
+
+  const result = data.result || {};
+  const validation = data.current_validation || {};
+  const acceptance = data.production_acceptance || {};
+  const learning = validation.learning_data_audit || {};
+  const status = productionAcceptanceStatus(data);
+  const durationMs = finiteNumber(data.finished_ms) !== null && finiteNumber(data.started_ms) !== null
+    ? Math.max(0, Number(data.finished_ms) - Number(data.started_ms))
+    : null;
+  const invalidated = Array.isArray(validation.invalidated_by) ? validation.invalidated_by : [];
+  const attempt = productionAcceptanceFirstAttempt(data);
+  const candidateStage = productionAcceptanceStage(data, 'candidate_selection');
+  const aiStage = productionAcceptanceStage(data, 'ai_strategy_plan');
+  const candidateEvidence = candidateStage && candidateStage.evidence ? candidateStage.evidence : {};
+  const aiEvidence = aiStage && aiStage.evidence ? aiStage.evidence : {};
+
+  if (summary) {
+    summary.innerHTML = [
+      acceptanceSummaryCard('Status', status, status === 'PASS' ? 'acceptance-ok' : 'acceptance-wait'),
+      acceptanceSummaryCard('Mode', data.mode || 'none'),
+      acceptanceSummaryCard('Blocked', result.blocked || 'none'),
+      acceptanceSummaryCard('Current', acceptance.currently_valid ? 'VALID' : 'INVALID'),
+      acceptanceSummaryCard('Data', `${learning.trust_level || '--'} / ${learning.production_grade ? 'PRODUCTION' : 'PENDING'}`),
+      acceptanceSummaryCard('Duration', durationMs === null ? '--' : `${fmt(durationMs / 1000, 1)}s`),
+    ].join('');
+  }
+
+  if (stagesEl) {
+    const stages = Array.isArray(data.stages) ? data.stages : [];
+    stagesEl.innerHTML = stages.length
+      ? stages.map((stage) => `<span class="badge ${acceptanceStageClass(stage)}">${escapeHtml(stage.name || '--')}: ${stage.ok ? 'OK' : 'FAIL'}</span>`).join('')
+      : '<span class="badge wait">no stage evidence</span>';
+  }
+
+  if (!detailEl) return;
+
+  if (attempt) {
+    const sample = attempt.strategy_geometry_sample || {};
+    const samples = sample.samples || {};
+    const reasons = Array.isArray(attempt.strategy_geometry_reasons)
+      ? attempt.strategy_geometry_reasons
+      : (attempt.validation_reason ? [attempt.validation_reason] : []);
+    detailEl.innerHTML = `
+      <div class="acceptance-section">
+        <div class="acceptance-section-title">
+          <b>${escapeHtml(attempt.symbol || aiEvidence.symbol || '--')}</b>
+          <span>${escapeHtml(attempt.provider || aiEvidence.provider || '--')} / ${escapeHtml(attempt.action || aiEvidence.action || '--')}</span>
+        </div>
+        <div class="acceptance-metrics">
+          ${acceptanceMetric('Validation', attempt.validation_reason || aiEvidence.validation_reason || '--', attempt.validation_ok ? 'ok' : 'bad')}
+          ${acceptanceMetric('Geometry', sample.status || '--', sample.status === 'ok' ? 'ok' : 'bad')}
+          ${acceptanceMetric('Win rate', samples.win_rate === undefined ? '--' : fmt(Number(samples.win_rate) * 100, 1) + '%')}
+          ${acceptanceMetric('Expected R', samples.expected_r === undefined ? '--' : fmt(samples.expected_r, 3))}
+          ${acceptanceMetric('Profit factor', samples.profit_factor === undefined ? '--' : fmt(samples.profit_factor, 3))}
+          ${acceptanceMetric('Samples', samples.sample_count === undefined ? '--' : String(samples.sample_count))}
+          ${acceptanceMetric('Pass gate', samples.pass_gate ? 'true' : 'false', samples.pass_gate ? 'ok' : 'bad')}
+        </div>
+        <div class="acceptance-reasons">
+          ${(reasons.length ? reasons : invalidated).slice(0, 8).map((reason) => `<span>${escapeHtml(reason)}</span>`).join('')}
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  const attempts = Array.isArray(candidateEvidence.candidate_attempts) ? candidateEvidence.candidate_attempts : [];
+  detailEl.innerHTML = `
+    <div class="acceptance-section">
+      <div class="acceptance-section-title">
+        <b>Candidate gate</b>
+        <span>${escapeHtml(result.blocked || 'waiting_for_evidence')}</span>
+      </div>
+      <div class="acceptance-metrics">
+        ${acceptanceMetric('Strict', (candidateEvidence.candidate_symbols || []).join(', ') || 'none', candidateStage && candidateStage.ok ? 'ok' : 'bad')}
+        ${acceptanceMetric('Configured source', candidateEvidence.configured_candidate_source || '--')}
+        ${acceptanceMetric('Configured symbols', (candidateEvidence.configured_candidate_symbols || []).join(', ') || 'none')}
+        ${acceptanceMetric('Invalidated', invalidated.join(', ') || 'none')}
+      </div>
+      <div class="acceptance-attempts">
+        ${attempts.slice(0, 3).map((row) => `
+          <div>
+            <b>#${row.attempt || '--'} strict ${row.strict_count || 0}</b>
+            <span>${escapeHtml((row.strict_symbols || []).join(', ') || 'none')}</span>
+            <small>review ${row.strict_review_count || 0} / configured ${escapeHtml((row.configured_candidate_symbols || []).join(', ') || 'none')}</small>
+          </div>
+        `).join('') || '<div><b>No candidate attempts</b><span>Run production preflight to populate evidence.</span></div>'}
+      </div>
+    </div>
+  `;
+}
+
+async function refreshProductionAcceptance() {
+  const summary = document.getElementById('productionAcceptanceSummary');
+  const detailEl = document.getElementById('productionAcceptanceDetail');
+  if (!summary && !detailEl) return null;
+  try {
+    const data = await j('/api/trade-director/acceptance/production');
+    renderProductionAcceptance(data);
+    return data;
+  } catch (err) {
+    if (summary) {
+      summary.innerHTML = acceptanceSummaryCard('Production Acceptance', 'LOAD FAIL', 'acceptance-wait');
+    }
+    if (detailEl) {
+      detailEl.innerHTML = `<div class="readiness-empty">${escapeHtml(errorMessage(err))}</div>`;
+    }
+    return null;
+  }
+}
+
 async function refreshSystemReadiness() {
   const summary = document.getElementById('systemReadinessSummary');
   const blockersEl = document.getElementById('systemReadinessBlockers');

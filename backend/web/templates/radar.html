@@ -26,6 +26,18 @@
     </div>
   </section>
 
+  <section class="panel production-acceptance-panel">
+    <div class="panel-title">
+      <b>Production Acceptance</b>
+      <span>latest preflight / candidate / geometry / Codex evidence</span>
+    </div>
+    <section class="summary-grid acceptance-summary-grid" id="productionAcceptanceSummary"></section>
+    <div class="acceptance-body">
+      <div class="acceptance-stages" id="productionAcceptanceStages"></div>
+      <div class="acceptance-detail" id="productionAcceptanceDetail"></div>
+    </div>
+  </section>
+
   <section class="panel candidate-panel">
     <div class="panel-title">
       <b>AI 候选队列</b>
@@ -46,4 +58,4 @@
     </div>
   </section>
 </section>
-{% endblock %}{% block scripts %}<script>window.PAGE='radar'; refreshRadar(); refreshSystemReadiness(); setInterval(refreshSystemReadiness,5000);</script>{% endblock %}
+{% endblock %}{% block scripts %}<script>window.PAGE='radar'; refreshRadar(); refreshSystemReadiness(); refreshProductionAcceptance(); setInterval(refreshSystemReadiness,5000); setInterval(refreshProductionAcceptance,10000);</script>{% endblock %}
