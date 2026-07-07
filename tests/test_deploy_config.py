@@ -295,8 +295,14 @@ def test_dockerignore_preserves_data_artifacts_for_backend_image():
 
     assert "data/" not in dockerignore
     assert "data/*.db" in dockerignore
+    assert "data/*.db-*" in dockerignore
+    assert "data/*.db.*" in dockerignore
     assert "data/*.sqlite" in dockerignore
+    assert "data/*.sqlite-*" in dockerignore
+    assert "data/*.sqlite.*" in dockerignore
     assert "data/*.sqlite3" in dockerignore
+    assert "data/*.sqlite3-*" in dockerignore
+    assert "data/*.sqlite3.*" in dockerignore
 
 
 def test_gitignore_excludes_local_codex_mount_directory():
@@ -320,8 +326,19 @@ def test_backend_dockerfile_installs_codex_cli_for_strategy_generation():
     assert "ARG CODEX_CLI_VERSION=0.130.0" in dockerfile
     assert "Acquire::Retries=5" in dockerfile
     assert "https://deb.nodesource.com/node_24.x" in dockerfile
-    assert 'npm install -g "@openai/codex@${CODEX_CLI_VERSION}"' in dockerfile
+    assert 'npm install -g --include=optional "@openai/codex@${CODEX_CLI_VERSION}"' in dockerfile
+    assert "codex_arch=" in dockerfile
+    assert "@openai/codex-${codex_arch}@npm:@openai/codex@${CODEX_CLI_VERSION}-${codex_arch}" in dockerfile
+    assert 'npm install --prefix "$(npm root -g)/@openai/codex" --include=optional "$codex_native"' in dockerfile
     assert "codex --version" in dockerfile
+
+
+def test_backend_dockerfile_installs_lightgbm_runtime_system_dependencies():
+    dockerfile = (ROOT / "Dockerfile.backend").read_text(encoding="utf-8")
+    install_runtime_deps = "apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates libgomp1"
+
+    assert install_runtime_deps in dockerfile
+    assert dockerfile.index(install_runtime_deps) < dockerfile.index('if [ "$INSTALL_CODEX_CLI" = "true" ]')
 
 
 def test_frontend_dockerfile_allows_base_image_overrides():

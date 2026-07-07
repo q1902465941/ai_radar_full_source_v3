@@ -103,6 +103,7 @@ class UniversalAnomalyAutoTrainer:
 
         trainer_status = self.trainer.status()
         runtime = trainer_status.get("runtime") if isinstance(trainer_status.get("runtime"), dict) else {}
+        current_model = self._current_model_context(trainer_status, runtime)
         current_samples = int(runtime.get("sample_count") or state.get("last_trained_sample_count") or 0)
         total_samples = int(summary.get("total") or 0)
         new_samples = total_samples - current_samples
@@ -132,7 +133,7 @@ class UniversalAnomalyAutoTrainer:
             result["reject_reason"] = str(train_report.get("error") or "train_failed")
             return self._finish(result, state)
 
-        accepted, reject_reason = self._accept_candidate(train_report, runtime, cfg)
+        accepted, reject_reason = self._accept_candidate(train_report, current_model, cfg)
         if not accepted:
             result["accepted"] = False
             result["reject_reason"] = reject_reason
@@ -213,18 +214,52 @@ class UniversalAnomalyAutoTrainer:
             return False, "not_enough_class_samples", context
         return True, "", context
 
-    def _accept_candidate(self, report: dict[str, Any], runtime: dict[str, Any], cfg: dict[str, Any]) -> tuple[bool, str]:
+    def _accept_candidate(self, report: dict[str, Any], current_model: dict[str, Any], cfg: dict[str, Any]) -> tuple[bool, str]:
         metrics = report.get("metrics") if isinstance(report.get("metrics"), dict) else {}
-        new_accuracy = self._optional_float(metrics.get("validation_accuracy"))
+        new_accuracy = self._validation_score(metrics)
         if new_accuracy is None:
             return False, "validation_accuracy_missing"
         if new_accuracy < float(cfg["min_validation_accuracy"]):
             return False, "validation_accuracy_below_floor"
-        current_metrics = runtime.get("metrics") if isinstance(runtime.get("metrics"), dict) else {}
-        current_accuracy = self._optional_float(current_metrics.get("validation_accuracy"))
+        current_metrics = current_model.get("metrics") if isinstance(current_model.get("metrics"), dict) else {}
+        current_accuracy = self._validation_score(current_metrics)
+        if self._has_balanced_validation_score(metrics) and not self._has_balanced_validation_score(current_metrics):
+            if self._is_imbalanced_current_model(current_model):
+                current_accuracy = None
         if current_accuracy is not None and new_accuracy < current_accuracy + float(cfg["min_accuracy_delta"]):
             return False, "validation_accuracy_below_current"
         return True, ""
+
+    def _current_model_context(self, trainer_status: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]:
+        context = dict(runtime)
+        artifact = trainer_status.get("artifact") if isinstance(trainer_status.get("artifact"), dict) else {}
+        if artifact:
+            context["artifact"] = artifact
+            if not isinstance(context.get("metrics"), dict) and isinstance(artifact.get("metrics"), dict):
+                context["metrics"] = artifact["metrics"]
+            if "class_counts" not in context and isinstance(artifact.get("class_counts"), dict):
+                context["class_counts"] = artifact["class_counts"]
+        return context
+
+    def _validation_score(self, metrics: dict[str, Any]) -> float | None:
+        balanced = self._optional_float(metrics.get("validation_balanced_accuracy"))
+        if balanced is not None:
+            return balanced
+        return self._optional_float(metrics.get("validation_accuracy"))
+
+    def _has_balanced_validation_score(self, metrics: dict[str, Any]) -> bool:
+        return self._optional_float(metrics.get("validation_balanced_accuracy")) is not None
+
+    def _is_imbalanced_current_model(self, current_model: dict[str, Any]) -> bool:
+        class_counts = current_model.get("class_counts") if isinstance(current_model.get("class_counts"), dict) else {}
+        if not class_counts:
+            artifact = current_model.get("artifact") if isinstance(current_model.get("artifact"), dict) else {}
+            class_counts = artifact.get("class_counts") if isinstance(artifact.get("class_counts"), dict) else {}
+        counts = [int(value or 0) for value in class_counts.values()]
+        total = sum(counts)
+        if total <= 0:
+            return False
+        return max(counts) / total >= 0.90
 
     def _promote_artifact(self, artifact: dict[str, Any]) -> None:
         import joblib

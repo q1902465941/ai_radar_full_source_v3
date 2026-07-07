@@ -232,6 +232,23 @@ class UniversalAnomalyClassifierTrainer:
         )
 
     def _fit_and_score(self, estimator, x: list[Any], y: list[str], class_counts: dict[str, int]) -> dict[str, Any]:
+        from sklearn.metrics import balanced_accuracy_score
+
+        def balanced(y_true, y_pred):
+            return round(float(balanced_accuracy_score(y_true, y_pred)), 6)
+
+        def majority_baseline(labels: list[str]) -> float | None:
+            if not labels:
+                return None
+            counts = Counter(labels)
+            return round(float(max(counts.values()) / len(labels)), 6)
+
+        def predictions(rows: list[Any]) -> list[str] | None:
+            predict = getattr(estimator, "predict", None)
+            if not callable(predict):
+                return None
+            return list(predict(rows))
+
         can_split = len(x) >= 12 and min(class_counts.values()) >= 2
         if can_split:
             test_size = max(len(class_counts), int(round(len(x) * 0.25)))
@@ -242,25 +259,38 @@ class UniversalAnomalyClassifierTrainer:
                 y_train, y_test = y[:split_at], y[split_at:]
                 if len(set(y_train)) < 2:
                     estimator.fit(x, y)
+                    y_pred = predictions(x)
                     return {
                         "train_accuracy": round(float(estimator.score(x, y)), 6),
+                        "train_balanced_accuracy": balanced(y, y_pred) if y_pred is not None else None,
                         "validation_accuracy": None,
+                        "validation_balanced_accuracy": None,
+                        "validation_majority_baseline_accuracy": None,
                         "validation_samples": 0,
                         "validation_split": "chronological_tail_unavailable_train_class_gap",
                     }
                 estimator.fit(x_train, y_train)
+                y_train_pred = predictions(x_train)
+                y_test_pred = predictions(x_test)
                 metrics = {
                     "train_accuracy": round(float(estimator.score(x_train, y_train)), 6),
+                    "train_balanced_accuracy": balanced(y_train, y_train_pred) if y_train_pred is not None else None,
                     "validation_accuracy": round(float(estimator.score(x_test, y_test)), 6),
+                    "validation_balanced_accuracy": balanced(y_test, y_test_pred) if y_test_pred is not None else None,
+                    "validation_majority_baseline_accuracy": majority_baseline(y_test),
                     "validation_samples": len(x_test),
                     "validation_split": "chronological_tail",
                 }
                 estimator.fit(x, y)
                 return metrics
         estimator.fit(x, y)
+        y_pred = predictions(x)
         return {
             "train_accuracy": round(float(estimator.score(x, y)), 6),
+            "train_balanced_accuracy": balanced(y, y_pred) if y_pred is not None else None,
             "validation_accuracy": None,
+            "validation_balanced_accuracy": None,
+            "validation_majority_baseline_accuracy": None,
             "validation_samples": 0,
             "validation_split": "none",
         }

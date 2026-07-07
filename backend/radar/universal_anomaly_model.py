@@ -48,6 +48,7 @@ class UniversalAnomalyModel:
 
     def __init__(self) -> None:
         self._trained_artifact: dict[str, Any] | None = None
+        self._trained_artifact_error = ""
 
     def extract_features(self, item: RadarItem) -> dict[str, Any]:
         metrics = self._structure_metrics(item)
@@ -123,18 +124,22 @@ class UniversalAnomalyModel:
             except Exception as exc:
                 self._trained_artifact = None
                 return {"active": False, "error": f"{type(exc).__name__}:{exc}"}
-        if not self._valid_trained_artifact(artifact):
+        artifact_error = self._trained_artifact_validation_error(artifact)
+        if artifact_error:
             self._trained_artifact = None
-            return {"active": False, "error": "invalid_trained_artifact"}
+            self._trained_artifact_error = artifact_error
+            return {"active": False, "error": artifact_error}
         self._trained_artifact = artifact
+        self._trained_artifact_error = ""
         return self.trained_model_status()
 
     def clear_trained_artifact(self) -> None:
         self._trained_artifact = None
+        self._trained_artifact_error = ""
 
     def trained_model_status(self) -> dict[str, Any]:
         artifact = self._trained_artifact if isinstance(self._trained_artifact, dict) else {}
-        return {
+        status = {
             "active": bool(artifact),
             "model": artifact.get("model_name", ""),
             "engine": artifact.get("engine", ""),
@@ -143,6 +148,9 @@ class UniversalAnomalyModel:
             "metrics": artifact.get("metrics", {}),
             "trained_at": artifact.get("trained_at", 0),
         }
+        if not artifact and self._trained_artifact_error:
+            status["error"] = self._trained_artifact_error
+        return status
 
     def _predict_with_trained_artifact(self, features: dict[str, Any]) -> dict[str, Any] | None:
         artifact = self._trained_artifact if isinstance(self._trained_artifact, dict) else None
@@ -192,12 +200,30 @@ class UniversalAnomalyModel:
         }
 
     def _valid_trained_artifact(self, artifact: dict[str, Any]) -> bool:
-        return (
+        return not self._trained_artifact_validation_error(artifact)
+
+    def _trained_artifact_validation_error(self, artifact: dict[str, Any]) -> str:
+        if not (
             isinstance(artifact, dict)
             and artifact.get("estimator") is not None
             and isinstance(artifact.get("feature_names"), list)
             and bool(artifact.get("feature_names"))
-        )
+        ):
+            return "invalid_trained_artifact"
+        metrics = artifact.get("metrics") if isinstance(artifact.get("metrics"), dict) else {}
+        balanced_accuracy = _maybe_float(metrics.get("validation_balanced_accuracy"))
+        if balanced_accuracy is None:
+            return "trained_validation_balanced_accuracy_missing"
+        from backend.config import settings
+
+        if balanced_accuracy < float(settings.universal_anomaly_min_validation_accuracy):
+            return "trained_validation_balanced_accuracy_below_floor"
+        class_counts = artifact.get("class_counts") if isinstance(artifact.get("class_counts"), dict) else {}
+        counts = [int(value or 0) for value in class_counts.values()]
+        total = sum(counts)
+        if total > 0 and max(counts) / total >= 0.90:
+            return "trained_class_distribution_imbalanced"
+        return ""
 
     def _prediction_record(self, features: dict[str, Any], artifact: dict[str, Any]) -> dict[str, Any]:
         record: dict[str, Any] = {}
@@ -283,6 +309,13 @@ def _f(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _maybe_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 universal_anomaly_model = UniversalAnomalyModel()

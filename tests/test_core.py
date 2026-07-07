@@ -1979,6 +1979,8 @@ def test_universal_anomaly_trainer_fits_lightgbm_when_available(tmp_path):
     assert report["engine"] == "lightgbm"
     assert report["model"] == "universal_anomaly_lightgbm_v1"
     assert report["sample_count"] == 36
+    assert "validation_balanced_accuracy" in report["metrics"]
+    assert "validation_majority_baseline_accuracy" in report["metrics"]
     assert "symbol" not in report["feature_names"]
     assert "symbol_key" in report["feature_names"]
     assert report["categorical_feature_names"] == ["symbol_key"]
@@ -2094,6 +2096,8 @@ def test_universal_anomaly_model_suppresses_feature_name_warning():
             "classes": ["LONG", "SHORT", "NEUTRAL"],
             "engine": "lightgbm",
             "model_name": "universal_anomaly_lightgbm_v1",
+            "class_counts": {"LONG": 100, "SHORT": 100, "NEUTRAL": 100},
+            "metrics": {"validation_balanced_accuracy": 0.72, "validation_accuracy": 0.74},
         }
     )
     item = high_quality_item(symbol="WARNLESSUSDT", side="LONG", price=100)
@@ -2104,6 +2108,31 @@ def test_universal_anomaly_model_suppresses_feature_name_warning():
 
     assert prediction["direction"] == "LONG"
     assert not any("valid feature names" in str(row.message) for row in caught)
+
+
+def test_universal_anomaly_model_rejects_legacy_imbalanced_artifact_without_balanced_validation():
+    class Estimator:
+        classes_ = ["LONG", "SHORT", "NEUTRAL"]
+
+        def predict_proba(self, vector):
+            return [[0.05, 0.05, 0.9]]
+
+    model = UniversalAnomalyModel()
+    status = model.activate_trained_artifact(
+        {
+            "estimator": Estimator(),
+            "feature_names": ["change_5m", "change_15m"],
+            "classes": ["LONG", "SHORT", "NEUTRAL"],
+            "engine": "lightgbm",
+            "model_name": "universal_anomaly_lightgbm_v1",
+            "class_counts": {"LONG": 8, "SHORT": 8, "NEUTRAL": 2484},
+            "metrics": {"validation_accuracy": 1.0},
+        }
+    )
+
+    assert status["active"] is False
+    assert status["error"] == "trained_validation_balanced_accuracy_missing"
+    assert model.trained_model_status()["active"] is False
 
 
 def test_universal_anomaly_model_train_api_invokes_trainer(monkeypatch):
@@ -2351,6 +2380,78 @@ def test_universal_anomaly_auto_trainer_rejects_degrading_candidate(tmp_path):
     assert result["accepted"] is False
     assert result["reject_reason"] == "validation_accuracy_below_current"
     assert trainer.runtime_model.activated is False
+
+
+def test_universal_anomaly_auto_trainer_accepts_balanced_candidate_over_imbalanced_legacy_accuracy(tmp_path):
+    class RuntimeModel:
+        def __init__(self):
+            self.activated = False
+
+        def activate_trained_artifact(self, artifact):
+            self.activated = True
+            return {"active": True}
+
+        def trained_model_status(self):
+            return {
+                "active": True,
+                "engine": "lightgbm",
+                "sample_count": 2500,
+                "metrics": {"validation_accuracy": 1.0},
+            }
+
+    class FakeTrainer:
+        def __init__(self):
+            self.artifact_path = tmp_path / "accept_balanced.joblib"
+            self.runtime_model = RuntimeModel()
+
+        def status(self):
+            return {
+                "runtime": self.runtime_model.trained_model_status(),
+                "artifact_exists": True,
+                "artifact": {
+                    "class_counts": {"NEUTRAL": 2484, "LONG": 8, "SHORT": 8},
+                    "metrics": {"validation_accuracy": 1.0},
+                },
+            }
+
+        def train(self, **kwargs):
+            return {
+                "ok": True,
+                "engine": "lightgbm",
+                "artifact": {"estimator": object(), "feature_names": ["x"]},
+                "sample_count": 5000,
+                "metrics": {
+                    "validation_accuracy": 0.56,
+                    "validation_balanced_accuracy": 0.54,
+                    "validation_majority_baseline_accuracy": 0.51,
+                },
+            }
+
+    class FakeTraining:
+        def collect(self, **kwargs):
+            return {"ok": True, "created": 2500, "summary": self.summary()}
+
+        def summary(self):
+            return {"total": 5000, "by_label": {"LONG": 2400, "SHORT": 2400, "NEUTRAL": 200}}
+
+    trainer = FakeTrainer()
+    auto = UniversalAnomalyAutoTrainer(training=FakeTraining(), trainer=trainer)
+
+    result = auto.step(
+        now_ms_value=1_000_000,
+        enabled=True,
+        collect_interval_seconds=0,
+        train_interval_seconds=0,
+        min_samples=500,
+        min_class_samples=50,
+        min_new_samples=100,
+        min_validation_accuracy=0.52,
+        min_accuracy_delta=0.0,
+    )
+
+    assert result["trained"] is True
+    assert result["accepted"] is True
+    assert trainer.runtime_model.activated is True
 
 
 def test_universal_anomaly_auto_trainer_skips_when_new_samples_are_insufficient(tmp_path):
