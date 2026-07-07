@@ -8096,6 +8096,93 @@ def test_production_acceptance_tries_next_candidate_after_risk_reject(monkeypatc
     assert stages["risk_model"]["ok"] is True
     assert [row["decision"] for row in stages["risk_model"]["evidence"]["risk_attempts"]] == ["OBSERVE", "OPEN"]
 
+
+def test_production_acceptance_prioritizes_geometry_supported_strict_candidates(monkeypatch):
+    weak = high_quality_item(symbol="GEOMETRYWEAKSTRICTUSDT", side="LONG", price=100)
+    strong = high_quality_item(symbol="GEOMETRYSTRONGSTRICTUSDT", side="LONG", price=100)
+    weak.score = 100
+    strong.score = 82
+    radar_engine.top50 = [weak, strong]
+    weak_sample = {
+        "status": "weak",
+        "sample_model": "first_touch_geometry_v1",
+        "symbol": weak.symbol,
+        "side": weak.direction,
+        "pass_count": 0,
+        "samples": {"sample_count": 119, "win_rate": 0.42, "expected_r": 0.04, "profit_factor": 0.9, "pass_gate": False},
+    }
+    strong_sample = ok_strategy_geometry_sample(strong)
+    geometry_reports = [
+        {"symbol": weak.symbol, "geometry_status": "weak", "sample_count": 119, "win_rate": 0.42, "expected_r": 0.04, "profit_factor": 0.9, "pass_count": 0},
+        {"symbol": strong.symbol, "geometry_status": "ok", "sample_count": 120, "win_rate": 0.64, "expected_r": 0.42, "profit_factor": 1.82, "pass_count": 12},
+    ]
+    seen = []
+
+    async def fake_scan(force_refresh=False):
+        radar_engine.top50 = [weak, strong]
+        radar_engine.last_scan_id = "scan_geometry_rank_test"
+        radar_engine.last_scan_time = "12:00:00"
+        return radar_engine.top50
+
+    async def fake_geometry_order(candidates, candidate_source, performance_context=None):
+        assert [item.symbol for item in candidates] == [weak.symbol, strong.symbol]
+        assert candidate_source == "strict"
+        autotrader._candidate_geometry_samples[weak.symbol] = weak_sample
+        autotrader._candidate_geometry_samples[strong.symbol] = strong_sample
+        return [strong, weak], geometry_reports
+
+    async def fail_geometry(candidate):
+        raise AssertionError("production acceptance should reuse pre-ranked geometry samples")
+
+    async def fake_generate(candidate, performance, candidate_source, candidate_attempts, strategy_geometry_sample=None):
+        seen.append((candidate.symbol, strategy_geometry_sample))
+        return StrategyPlan(
+            strategy_id=f"wait_{candidate.symbol}",
+            action="WAIT",
+            symbol=candidate.symbol,
+            side="NEUTRAL",
+            entry_zone_low=candidate.price,
+            entry_zone_high=candidate.price,
+            ideal_entry_price=candidate.price,
+            stop_loss=0.0,
+            tp1=0.0,
+            tp2=0.0,
+            confidence=0.0,
+            reason="test wait",
+            wait_type="TEST",
+            raw={"provider": "codex_cli"},
+        )
+
+    monkeypatch.setattr(learning_data_audit, "summary", lambda force=False, limit=None: {"production_grade": True, "trust_level": "PRODUCTION", "reasons": []})
+    monkeypatch.setattr(radar_engine, "scan", fake_scan)
+    monkeypatch.setattr(radar_engine, "select_ai_candidates", lambda items: [weak, strong])
+    monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([weak, strong], "strict"))
+    monkeypatch.setattr(autotrader, "_geometry_supported_candidate_order", fake_geometry_order)
+    monkeypatch.setattr("backend.trading.production_acceptance.strategy_geometry_sampler.evaluate", fail_geometry)
+    monkeypatch.setattr(production_acceptance_runner, "_generate_plan", fake_generate)
+    monkeypatch.setattr(
+        autotrader,
+        "_ai_candidate_freshness_report",
+        lambda candidate, source, performance: (True, {"reasons": []}),
+    )
+    monkeypatch.setattr(
+        ai_strategy_feedback,
+        "evaluate_candidate",
+        lambda candidate: {"candidate_feedback": {"generation_gate": {"allow_open_plan": True, "reasons": []}}},
+    )
+
+    out = asyncio.run(production_acceptance_runner.run(mode="preflight", manage_seconds=0))
+    stages = {stage["name"]: stage for stage in out["stages"]}
+
+    assert stages["candidate_selection"]["evidence"]["candidate_symbols"] == [strong.symbol, weak.symbol]
+    assert stages["candidate_selection"]["evidence"]["geometry_candidate_reports"] == geometry_reports
+    assert seen == [(strong.symbol, strong_sample)]
+    plan_attempts = stages["ai_strategy_plan"]["evidence"]["plan_attempts"]
+    assert [row["symbol"] for row in plan_attempts] == [strong.symbol, weak.symbol]
+    assert plan_attempts[0]["strategy_geometry_sample"] == strong_sample
+    assert plan_attempts[1]["provider"] == "strategy_geometry_gate"
+
+
 def test_production_acceptance_shadow_reviews_when_no_strict_candidate(monkeypatch):
     review_item = high_quality_item(symbol="REVIEWUSDT", side="SHORT", price=100)
     review_item.fund_confirm_count = 2

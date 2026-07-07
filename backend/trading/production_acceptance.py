@@ -218,6 +218,8 @@ class ProductionAcceptanceRunner:
         configured_source = "unknown"
         candidates = []
         review_candidates = []
+        geometry_candidate_reports: list[dict[str, Any]] = []
+        candidate_geometry_samples: dict[str, dict[str, Any]] = {}
         for attempt in range(1, PRODUCTION_ACCEPTANCE_SCAN_ATTEMPTS + 1):
             configured_candidates, configured_source = autotrader._candidate_batch(performance)
             candidates = radar_engine.select_ai_candidates(radar_engine.top50)
@@ -248,6 +250,15 @@ class ProductionAcceptanceRunner:
                     candidate_attempts[-1]["retry_scan_error"] = _err(exc)
                     break
         candidate_source = "strict"
+        if candidates:
+            candidates, geometry_candidate_reports, candidate_geometry_samples = await self._geometry_rank_candidates(
+                candidates,
+                candidate_source,
+                performance,
+            )
+            if candidate_attempts:
+                candidate_attempts[-1]["geometry_ranked_symbols"] = [item.symbol for item in candidates]
+                candidate_attempts[-1]["geometry_candidate_reports"] = geometry_candidate_reports
         production_candidate_ok = bool(candidates)
         stages.append(
             self._stage(
@@ -256,6 +267,7 @@ class ProductionAcceptanceRunner:
                 {
                     "candidate_source": candidate_source,
                     "candidate_symbols": [item.symbol for item in candidates],
+                    "geometry_candidate_reports": geometry_candidate_reports,
                     "configured_candidate_source": configured_source,
                     "configured_candidate_symbols": [item.symbol for item in configured_candidates],
                     "production_requires_source": "strict",
@@ -269,11 +281,17 @@ class ProductionAcceptanceRunner:
         )
         if not candidates:
             if review_candidates:
+                review_candidates, shadow_geometry_reports, shadow_geometry_samples = await self._geometry_rank_candidates(
+                    review_candidates,
+                    "strict_review",
+                    performance,
+                )
                 shadow = await self._try_generate_open_plan(
                     review_candidates,
                     performance,
                     "strict_review",
                     candidate_attempts,
+                    candidate_geometry_samples=shadow_geometry_samples,
                 )
                 stages.append(
                     self._stage(
@@ -282,6 +300,7 @@ class ProductionAcceptanceRunner:
                         {
                             "candidate_source": "strict_review",
                             "candidate_symbols": [item.symbol for item in review_candidates],
+                            "geometry_candidate_reports": shadow_geometry_reports,
                             "not_counted_as_production": True,
                             "reason": "strict_review candidates are useful for shadow validation but cannot satisfy production strict acceptance",
                             "provider": shadow["provider"],
@@ -300,7 +319,14 @@ class ProductionAcceptanceRunner:
             self._store(report)
             return report
 
-        chain = await self._try_generate_and_risk_open(candidates, performance, candidate_source, candidate_attempts, open_positions)
+        chain = await self._try_generate_and_risk_open(
+            candidates,
+            performance,
+            candidate_source,
+            candidate_attempts,
+            open_positions,
+            candidate_geometry_samples=candidate_geometry_samples,
+        )
         item = chain["item"]
         plan = chain["plan"]
         provider = chain["provider"]
@@ -541,6 +567,7 @@ class ProductionAcceptanceRunner:
         performance: dict[str, Any],
         candidate_source: str,
         candidate_attempts: list[dict[str, Any]],
+        candidate_geometry_samples: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         plan_attempts: list[dict[str, Any]] = []
         selected_item: RadarItem | None = None
@@ -615,7 +642,7 @@ class ProductionAcceptanceRunner:
                     selected_provider = "generation_gate"
                     selected_plan_reason = ",".join(gate_reasons[:4])
                 continue
-            geometry_sample = await self._strategy_geometry_sample(attempted_item)
+            geometry_sample = await self._strategy_geometry_sample(attempted_item, candidate_geometry_samples)
             geometry_reasons = self._strategy_geometry_reasons(geometry_sample)
             if geometry_reasons:
                 attempted_plan = self._strategy_geometry_wait_plan(attempted_item, geometry_sample, geometry_reasons)
@@ -691,6 +718,7 @@ class ProductionAcceptanceRunner:
         candidate_source: str,
         candidate_attempts: list[dict[str, Any]],
         open_positions: int,
+        candidate_geometry_samples: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         market = {"market_heat": radar_engine.market_heat, "volatility_regime": autotrader._volatility_regime()}
         account_summary = None
@@ -771,7 +799,7 @@ class ProductionAcceptanceRunner:
                     selected_provider = "generation_gate"
                     selected_plan_reason = ",".join(gate_reasons[:4])
                 continue
-            geometry_sample = await self._strategy_geometry_sample(attempted_item)
+            geometry_sample = await self._strategy_geometry_sample(attempted_item, candidate_geometry_samples)
             geometry_reasons = self._strategy_geometry_reasons(geometry_sample)
             if geometry_reasons:
                 attempted_plan = self._strategy_geometry_wait_plan(attempted_item, geometry_sample, geometry_reasons)
@@ -929,7 +957,47 @@ class ProductionAcceptanceRunner:
             raw={"provider": "generation_gate", "generation_gate": gate},
         )
 
-    async def _strategy_geometry_sample(self, item: RadarItem) -> dict[str, Any]:
+    async def _geometry_rank_candidates(
+        self,
+        candidates: list[RadarItem],
+        candidate_source: str,
+        performance: dict[str, Any],
+    ) -> tuple[list[RadarItem], list[dict[str, Any]], dict[str, dict[str, Any]]]:
+        try:
+            ordered, reports = await autotrader._geometry_supported_candidate_order(candidates, candidate_source, performance)
+        except Exception as exc:
+            return (
+                candidates,
+                [
+                    {
+                        "candidate_source": candidate_source,
+                        "geometry_status": "unavailable",
+                        "error": _err(exc),
+                    }
+                ],
+                {},
+            )
+        ordered = ordered if ordered else candidates
+        cache = getattr(autotrader, "_candidate_geometry_samples", {})
+        samples: dict[str, dict[str, Any]] = {}
+        if isinstance(cache, dict):
+            for item in ordered:
+                symbol = str(getattr(item, "symbol", "") or "")
+                sample = cache.get(symbol)
+                if isinstance(sample, dict) and sample:
+                    samples[symbol] = sample
+        return ordered, reports if isinstance(reports, list) else [], samples
+
+    async def _strategy_geometry_sample(
+        self,
+        item: RadarItem,
+        candidate_geometry_samples: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        cached = {}
+        if isinstance(candidate_geometry_samples, dict):
+            cached = candidate_geometry_samples.get(item.symbol) or {}
+        if isinstance(cached, dict) and cached:
+            return cached
         try:
             sample = await strategy_geometry_sampler.evaluate(item)
         except Exception as exc:
