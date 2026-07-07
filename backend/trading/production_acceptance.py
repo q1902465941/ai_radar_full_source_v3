@@ -581,6 +581,37 @@ class ProductionAcceptanceRunner:
                     selected_provider = "freshness_guard"
                     selected_plan_reason = ",".join(freshness["reasons"][:4])
                 continue
+            generation_gate = self._blocked_generation_gate(attempted_item)
+            if generation_gate:
+                attempted_plan = self._generation_gate_wait_plan(attempted_item, generation_gate)
+                gate_reasons = _gate_reasons(generation_gate)
+                plan_attempts.append(
+                    {
+                        "attempt": idx,
+                        "symbol": attempted_item.symbol,
+                        "side": attempted_item.direction,
+                        "rank": attempted_item.rank,
+                        "score": attempted_item.score,
+                        "fund_confirm": f"{attempted_item.fund_confirm_count}/{attempted_item.fund_confirm_total}",
+                        "fake_breakout_risk": attempted_item.fake_breakout_risk,
+                        "provider": "generation_gate",
+                        "action": attempted_plan.action,
+                        "confidence": attempted_plan.confidence,
+                        "reason": attempted_plan.reason,
+                        "wait_type": attempted_plan.wait_type,
+                        "validation_ok": False,
+                        "validation_reason": ",".join(gate_reasons[:4]),
+                        "opens": False,
+                        "generation_gate": generation_gate,
+                        "plan": _plan_snapshot(attempted_plan),
+                    }
+                )
+                if selected_plan is None:
+                    selected_item = attempted_item
+                    selected_plan = attempted_plan
+                    selected_provider = "generation_gate"
+                    selected_plan_reason = ",".join(gate_reasons[:4])
+                continue
             attempted_plan = await self._generate_plan(attempted_item, performance, candidate_source, candidate_attempts)
             attempted_provider = _plan_provider(attempted_plan)
             attempted_ok, attempted_reason = strategy_validator.validate(attempted_plan)
@@ -686,6 +717,37 @@ class ProductionAcceptanceRunner:
                     selected_provider = "freshness_guard"
                     selected_plan_reason = ",".join(freshness["reasons"][:4])
                 continue
+            generation_gate = self._blocked_generation_gate(attempted_item)
+            if generation_gate:
+                attempted_plan = self._generation_gate_wait_plan(attempted_item, generation_gate)
+                gate_reasons = _gate_reasons(generation_gate)
+                plan_attempts.append(
+                    {
+                        "attempt": idx,
+                        "symbol": attempted_item.symbol,
+                        "side": attempted_item.direction,
+                        "rank": attempted_item.rank,
+                        "score": attempted_item.score,
+                        "fund_confirm": f"{attempted_item.fund_confirm_count}/{attempted_item.fund_confirm_total}",
+                        "fake_breakout_risk": attempted_item.fake_breakout_risk,
+                        "provider": "generation_gate",
+                        "action": attempted_plan.action,
+                        "confidence": attempted_plan.confidence,
+                        "reason": attempted_plan.reason,
+                        "wait_type": attempted_plan.wait_type,
+                        "validation_ok": False,
+                        "validation_reason": ",".join(gate_reasons[:4]),
+                        "opens": False,
+                        "generation_gate": generation_gate,
+                        "plan": _plan_snapshot(attempted_plan),
+                    }
+                )
+                if selected_plan is None:
+                    selected_item = attempted_item
+                    selected_plan = attempted_plan
+                    selected_provider = "generation_gate"
+                    selected_plan_reason = ",".join(gate_reasons[:4])
+                continue
             attempted_plan = await self._generate_plan(attempted_item, performance, candidate_source, candidate_attempts)
             attempted_provider = _plan_provider(attempted_plan)
             attempted_ok, attempted_reason = strategy_validator.validate(attempted_plan)
@@ -789,6 +851,41 @@ class ProductionAcceptanceRunner:
             raw={"provider": "freshness_guard", "freshness": freshness},
         )
 
+    def _blocked_generation_gate(self, item: RadarItem) -> dict[str, Any]:
+        try:
+            feedback = ai_strategy_feedback.evaluate_candidate(item)
+        except Exception:
+            return {}
+        candidate_feedback = feedback.get("candidate_feedback") if isinstance(feedback, dict) else {}
+        gate = candidate_feedback.get("generation_gate") if isinstance(candidate_feedback, dict) else {}
+        if isinstance(gate, dict) and gate.get("allow_open_plan") is False:
+            return gate
+        return {}
+
+    def _generation_gate_wait_plan(self, item: RadarItem, gate: dict[str, Any]) -> StrategyPlan:
+        reasons = _gate_reasons(gate)
+        reason = "generation_gate_blocked"
+        if reasons:
+            reason = f"{reason}:{','.join(reasons[:6])}"
+        price = float(item.price or 0.0)
+        return StrategyPlan(
+            strategy_id=f"generation_gate_wait_{item.symbol}_{now_ms()}",
+            action="WAIT",
+            symbol=item.symbol,
+            side="NEUTRAL",
+            entry_zone_low=price,
+            entry_zone_high=price,
+            ideal_entry_price=price,
+            stop_loss=0.0,
+            tp1=0.0,
+            tp2=0.0,
+            confidence=0.0,
+            reason=reason,
+            wait_type="GENERATION_GATE_BLOCKED",
+            expire_after_seconds=300,
+            raw={"provider": "generation_gate", "generation_gate": gate},
+        )
+
     def _live_gate(self, mode: str, readiness: dict[str, Any]) -> tuple[bool, str]:
         if settings.trade_mode != "live":
             return False, "trade_mode_not_live"
@@ -879,6 +976,10 @@ def _provider_status(ai_status: dict[str, Any]) -> dict[str, Any]:
     if provider in {"codex_cli", "deepseek"}:
         return ai_status.get(provider) or {}
     return {"provider": provider, "not_invoked_reason": ai_status.get("not_invoked_reason", "")}
+
+
+def _gate_reasons(gate: dict[str, Any]) -> list[str]:
+    return [str(reason) for reason in gate.get("reasons") or [] if str(reason)]
 
 
 def _plan_provider(plan: StrategyPlan) -> str:

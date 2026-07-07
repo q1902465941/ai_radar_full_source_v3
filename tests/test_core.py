@@ -8682,6 +8682,43 @@ def test_production_acceptance_status_invalidates_pass_without_stage_evidence(mo
     ]
 
 
+def test_production_acceptance_skips_codex_when_generation_gate_blocks(monkeypatch):
+    item = high_quality_item(symbol="GATEBLOCKUSDT", side="LONG", price=100)
+
+    async def fake_fresh_item(candidate):
+        return candidate
+
+    async def fail_generate(*args, **kwargs):
+        raise AssertionError("generation gate should block before Codex is called")
+
+    monkeypatch.setattr(production_acceptance_runner, "_fresh_item", fake_fresh_item)
+    monkeypatch.setattr(production_acceptance_runner, "_generate_plan", fail_generate)
+    monkeypatch.setattr(
+        autotrader,
+        "_ai_candidate_freshness_report",
+        lambda candidate, source, performance: (True, {"reasons": []}),
+    )
+    monkeypatch.setattr(
+        ai_strategy_feedback,
+        "evaluate_candidate",
+        lambda candidate: {
+            "candidate_feedback": {
+                "generation_gate": {
+                    "allow_open_plan": False,
+                    "reasons": ["cyqnt_estimated_win_rate_low"],
+                }
+            }
+        },
+    )
+
+    out = asyncio.run(production_acceptance_runner._try_generate_open_plan([item], {}, "strict", []))
+
+    assert out["provider"] == "generation_gate"
+    assert out["plan"].action == "WAIT"
+    assert out["plan_attempts"][0]["provider"] == "generation_gate"
+    assert out["plan_attempts"][0]["validation_reason"] == "cyqnt_estimated_win_rate_low"
+
+
 def test_autotrader_real_live_guard_blocks_after_unprotected_live_freeze(monkeypatch):
     monkeypatch.setattr(settings, "trade_mode", "live")
     monkeypatch.setattr(settings, "live_trading_enabled", True)
