@@ -7864,6 +7864,7 @@ def test_production_acceptance_rejects_open_decision_when_execution_mode_is_pape
     monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([item], "strict"))
     monkeypatch.setattr(openai_strategy_client, "generate", fake_generate)
     monkeypatch.setattr(autotrader, "_account_context", fake_account_context)
+    patch_ok_production_strategy_geometry(monkeypatch)
     monkeypatch.setattr(
         auto_trading_risk_model,
         "decide",
@@ -7939,6 +7940,7 @@ def test_production_acceptance_uses_strict_candidates_not_paper_top(monkeypatch)
     monkeypatch.setattr(radar_engine, "scan", fake_scan)
     monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([paper_item], "paper_top"))
     monkeypatch.setattr(openai_strategy_client, "generate", fake_generate)
+    patch_ok_production_strategy_geometry(monkeypatch)
 
     out = __import__("asyncio").run(production_acceptance_runner.run(mode="preflight", manage_seconds=0))
     stages = {stage["name"]: stage for stage in out["stages"]}
@@ -7996,6 +7998,7 @@ def test_production_acceptance_tries_next_strict_candidate_after_wait(monkeypatc
     monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([first], "strict"))
     monkeypatch.setattr(openai_strategy_client, "generate", fake_generate)
     monkeypatch.setattr(autotrader, "_account_context", fake_account_context)
+    patch_ok_production_strategy_geometry(monkeypatch)
     monkeypatch.setattr(
         auto_trading_risk_model,
         "decide",
@@ -8083,6 +8086,7 @@ def test_production_acceptance_tries_next_candidate_after_risk_reject(monkeypatc
     monkeypatch.setattr(openai_strategy_client, "generate", fake_generate)
     monkeypatch.setattr(autotrader, "_account_context", fake_account_context)
     monkeypatch.setattr(auto_trading_risk_model, "decide", fake_decide)
+    patch_ok_production_strategy_geometry(monkeypatch)
 
     out = __import__("asyncio").run(production_acceptance_runner.run(mode="preflight", manage_seconds=0))
     stages = {stage["name"]: stage for stage in out["stages"]}
@@ -8113,6 +8117,7 @@ def test_production_acceptance_shadow_reviews_when_no_strict_candidate(monkeypat
     monkeypatch.setattr(radar_engine, "select_ai_review_candidates", lambda items: [review_item])
     monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([review_item], "strict_review"))
     monkeypatch.setattr(openai_strategy_client, "generate", fake_generate)
+    patch_ok_production_strategy_geometry(monkeypatch)
 
     out = __import__("asyncio").run(production_acceptance_runner.run(mode="preflight", manage_seconds=0))
     stages = {stage["name"]: stage for stage in out["stages"]}
@@ -8717,6 +8722,107 @@ def test_production_acceptance_skips_codex_when_generation_gate_blocks(monkeypat
     assert out["plan"].action == "WAIT"
     assert out["plan_attempts"][0]["provider"] == "generation_gate"
     assert out["plan_attempts"][0]["validation_reason"] == "cyqnt_estimated_win_rate_low"
+
+
+def test_production_acceptance_skips_codex_when_strategy_geometry_is_weak(monkeypatch):
+    item = high_quality_item(symbol="GEOMETRYBLOCKUSDT", side="LONG", price=100)
+    weak_sample = {
+        "status": "weak",
+        "sample_model": "first_touch_geometry_v1",
+        "symbol": item.symbol,
+        "side": "LONG",
+        "pass_count": 0,
+        "samples": {"sample_count": 119, "win_rate": 0.46, "expected_r": 0.05, "profit_factor": 1.03, "pass_gate": False},
+    }
+
+    async def fake_fresh_item(candidate):
+        return candidate
+
+    async def fail_generate(*args, **kwargs):
+        raise AssertionError("weak geometry should block before Codex is called")
+
+    async def fake_geometry(candidate):
+        return weak_sample
+
+    monkeypatch.setattr(production_acceptance_runner, "_fresh_item", fake_fresh_item)
+    monkeypatch.setattr(production_acceptance_runner, "_generate_plan", fail_generate)
+    monkeypatch.setattr("backend.trading.production_acceptance.strategy_geometry_sampler.evaluate", fake_geometry)
+    monkeypatch.setattr(
+        autotrader,
+        "_ai_candidate_freshness_report",
+        lambda candidate, source, performance: (True, {"reasons": []}),
+    )
+    monkeypatch.setattr(
+        ai_strategy_feedback,
+        "evaluate_candidate",
+        lambda candidate: {"candidate_feedback": {"generation_gate": {"allow_open_plan": True, "reasons": []}}},
+    )
+
+    out = asyncio.run(production_acceptance_runner._try_generate_open_plan([item], {}, "strict", []))
+
+    assert out["provider"] == "strategy_geometry_gate"
+    assert out["plan"].action == "WAIT"
+    assert out["plan_attempts"][0]["provider"] == "strategy_geometry_gate"
+    assert out["plan_attempts"][0]["validation_reason"] == "strategy_geometry_sample_not_ok"
+    assert out["plan_attempts"][0]["strategy_geometry_sample"] == weak_sample
+
+
+def test_production_acceptance_passes_valid_strategy_geometry_to_codex(monkeypatch):
+    item = high_quality_item(symbol="GEOMETRYOKUSDT", side="SHORT", price=100)
+    ok_sample = {
+        "status": "ok",
+        "sample_model": "first_touch_geometry_v1",
+        "symbol": item.symbol,
+        "side": "SHORT",
+        "pass_count": 7,
+        "selected_geometry": {"side": "SHORT", "entry": 100, "stop_loss": 101, "tp1": 99, "tp2": 97},
+        "samples": {"sample_count": 119, "win_rate": 0.64, "expected_r": 0.42, "profit_factor": 1.82, "pass_gate": True},
+    }
+    seen_geometry = []
+
+    async def fake_fresh_item(candidate):
+        return candidate
+
+    async def fake_generate(candidate, performance, candidate_source, candidate_attempts, strategy_geometry_sample=None):
+        seen_geometry.append(strategy_geometry_sample)
+        return StrategyPlan(
+            strategy_id="geometry_ok_wait",
+            action="WAIT",
+            symbol=candidate.symbol,
+            side="NEUTRAL",
+            entry_zone_low=candidate.price,
+            entry_zone_high=candidate.price,
+            ideal_entry_price=candidate.price,
+            stop_loss=0.0,
+            tp1=0.0,
+            tp2=0.0,
+            confidence=0.0,
+            reason="test wait",
+            wait_type="TEST",
+            raw={"provider": "codex_cli"},
+        )
+
+    async def fake_geometry(candidate):
+        return ok_sample
+
+    monkeypatch.setattr(production_acceptance_runner, "_fresh_item", fake_fresh_item)
+    monkeypatch.setattr(production_acceptance_runner, "_generate_plan", fake_generate)
+    monkeypatch.setattr("backend.trading.production_acceptance.strategy_geometry_sampler.evaluate", fake_geometry)
+    monkeypatch.setattr(
+        autotrader,
+        "_ai_candidate_freshness_report",
+        lambda candidate, source, performance: (True, {"reasons": []}),
+    )
+    monkeypatch.setattr(
+        ai_strategy_feedback,
+        "evaluate_candidate",
+        lambda candidate: {"candidate_feedback": {"generation_gate": {"allow_open_plan": True, "reasons": []}}},
+    )
+
+    out = asyncio.run(production_acceptance_runner._try_generate_open_plan([item], {}, "strict", []))
+
+    assert seen_geometry == [ok_sample]
+    assert out["provider"] == "codex_cli"
 
 
 def test_autotrader_real_live_guard_blocks_after_unprotected_live_freeze(monkeypatch):
@@ -11322,6 +11428,41 @@ def high_quality_item(symbol="XUSDT", side="LONG", price=100):
         atr_pct=1.2,
         wick_ratio=0.25,
     )
+
+def ok_strategy_geometry_sample(item):
+    is_long = item.direction == "LONG"
+    price = float(item.price or 100.0)
+    risk = price * 0.01
+    return {
+        "status": "ok",
+        "sample_model": "first_touch_geometry_v1",
+        "symbol": item.symbol,
+        "side": item.direction,
+        "pass_count": 12,
+        "selected_geometry": {
+            "side": item.direction,
+            "entry": price,
+            "stop_loss": price - risk if is_long else price + risk,
+            "tp1": price + risk * 1.2 if is_long else price - risk * 1.2,
+            "tp2": price + risk * 3.0 if is_long else price - risk * 3.0,
+            "tp2_r": 3.0,
+        },
+        "samples": {
+            "sample_count": 120,
+            "win_rate": 0.64,
+            "expected_r": 0.42,
+            "profit_factor": 1.82,
+            "tp2_hit_rate": 0.34,
+            "stop_hit_rate": 0.28,
+            "pass_gate": True,
+        },
+    }
+
+def patch_ok_production_strategy_geometry(monkeypatch):
+    async def fake_geometry(item):
+        return ok_strategy_geometry_sample(item)
+
+    monkeypatch.setattr("backend.trading.production_acceptance.strategy_geometry_sampler.evaluate", fake_geometry)
 
 def stable_candidate_feature_report(item):
     score = float(getattr(item, "score", 0.0) or 0.0)

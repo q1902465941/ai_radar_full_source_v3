@@ -13,6 +13,7 @@ from backend.config import settings
 from backend.exchange.binance_futures import binance_futures
 from backend.learning.ai_strategy_feedback import ai_strategy_feedback
 from backend.learning.learning_data_audit import learning_data_audit
+from backend.learning.strategy_geometry_sampler import strategy_geometry_sampler
 from backend.learning.strategy_registry import strategy_registry
 from backend.market.binance_rest import binance_rest
 from backend.market.market_service import market_service
@@ -32,6 +33,7 @@ PRODUCTION_ACCEPTANCE_MODES = {"preflight", "exchange_test_order", "real_order"}
 PRODUCTION_ACCEPTANCE_SCAN_ATTEMPTS = 3
 PRODUCTION_ACCEPTANCE_SCAN_RETRY_SECONDS = 2.0
 PRODUCTION_ACCEPTANCE_SCAN_TIMEOUT_SECONDS = 90.0
+STRATEGY_GEOMETRY_MIN_PROFIT_FACTOR = 1.15
 PRODUCTION_ACCEPTANCE_REQUIRED_STAGES = [
     "scan",
     "learning_data_audit",
@@ -501,36 +503,37 @@ class ProductionAcceptanceRunner:
         performance: dict[str, Any],
         candidate_source: str,
         candidate_attempts: list[dict[str, Any]],
+        strategy_geometry_sample: dict[str, Any] | None = None,
     ) -> StrategyPlan:
         active_strategy = strategy_registry.active()
-        return await ai_service.generate_strategy(
-            item,
-            {
-                "open_positions": len(position_registry.list_open()),
-                "performance_guard": performance,
-                "candidate_selection": {
-                    "source": candidate_source,
-                    "production_acceptance": True,
-                    "strict_candidate": candidate_source == "strict",
-                    "attempts": candidate_attempts,
-                    "instruction": (
-                        "This item already passed the local strict candidate selector. "
-                        "Radar rank is diagnostic, not an automatic veto. "
-                        "If current edge, alignment, expectancy, and risk geometry are valid, generate a constrained OPEN strategy even when historical attribution is weak. "
-                        "Historical weakness belongs in confidence, invalidation, allowed_stages.live=false, and research_review; risk_model and live_readiness own final execution permission. "
-                        "Return WAIT only when current edge, alignment, expectancy after costs, or risk geometry is insufficient."
-                    ),
-                },
-                "active_evolved_strategy": {
-                    "strategy_id": active_strategy.get("strategy_id"),
-                    "name": active_strategy.get("name"),
-                    "filters": active_strategy.get("filters"),
-                    "metrics": active_strategy.get("metrics"),
-                }
-                if active_strategy
-                else None,
+        position_context = {
+            "open_positions": len(position_registry.list_open()),
+            "performance_guard": performance,
+            "candidate_selection": {
+                "source": candidate_source,
+                "production_acceptance": True,
+                "strict_candidate": candidate_source == "strict",
+                "attempts": candidate_attempts,
+                "instruction": (
+                    "This item already passed the local strict candidate selector. "
+                    "Radar rank is diagnostic, not an automatic veto. "
+                    "If current edge, alignment, expectancy, and risk geometry are valid, generate a constrained OPEN strategy even when historical attribution is weak. "
+                    "Historical weakness belongs in confidence, invalidation, allowed_stages.live=false, and research_review; risk_model and live_readiness own final execution permission. "
+                    "Return WAIT only when current edge, alignment, expectancy after costs, or risk geometry is insufficient."
+                ),
             },
-        )
+            "active_evolved_strategy": {
+                "strategy_id": active_strategy.get("strategy_id"),
+                "name": active_strategy.get("name"),
+                "filters": active_strategy.get("filters"),
+                "metrics": active_strategy.get("metrics"),
+            }
+            if active_strategy
+            else None,
+        }
+        if isinstance(strategy_geometry_sample, dict) and strategy_geometry_sample:
+            position_context["strategy_geometry_sample"] = strategy_geometry_sample
+        return await ai_service.generate_strategy(item, position_context)
 
     async def _try_generate_open_plan(
         self,
@@ -612,7 +615,26 @@ class ProductionAcceptanceRunner:
                     selected_provider = "generation_gate"
                     selected_plan_reason = ",".join(gate_reasons[:4])
                 continue
-            attempted_plan = await self._generate_plan(attempted_item, performance, candidate_source, candidate_attempts)
+            geometry_sample = await self._strategy_geometry_sample(attempted_item)
+            geometry_reasons = self._strategy_geometry_reasons(geometry_sample)
+            if geometry_reasons:
+                attempted_plan = self._strategy_geometry_wait_plan(attempted_item, geometry_sample, geometry_reasons)
+                plan_attempts.append(
+                    self._strategy_geometry_attempt(idx, attempted_item, attempted_plan, geometry_sample, geometry_reasons)
+                )
+                if selected_plan is None:
+                    selected_item = attempted_item
+                    selected_plan = attempted_plan
+                    selected_provider = "strategy_geometry_gate"
+                    selected_plan_reason = geometry_reasons[0]
+                continue
+            attempted_plan = await self._generate_plan(
+                attempted_item,
+                performance,
+                candidate_source,
+                candidate_attempts,
+                strategy_geometry_sample=geometry_sample,
+            )
             attempted_provider = _plan_provider(attempted_plan)
             attempted_ok, attempted_reason = strategy_validator.validate(attempted_plan)
             attempted_ai_generated = _accepted_strategy_provider(attempted_provider)
@@ -635,6 +657,7 @@ class ProductionAcceptanceRunner:
                     "validation_ok": attempted_ok,
                     "validation_reason": attempted_reason,
                     "opens": opens,
+                    "strategy_geometry_sample": geometry_sample,
                     "plan": _plan_snapshot(attempted_plan),
                 }
             )
@@ -748,7 +771,26 @@ class ProductionAcceptanceRunner:
                     selected_provider = "generation_gate"
                     selected_plan_reason = ",".join(gate_reasons[:4])
                 continue
-            attempted_plan = await self._generate_plan(attempted_item, performance, candidate_source, candidate_attempts)
+            geometry_sample = await self._strategy_geometry_sample(attempted_item)
+            geometry_reasons = self._strategy_geometry_reasons(geometry_sample)
+            if geometry_reasons:
+                attempted_plan = self._strategy_geometry_wait_plan(attempted_item, geometry_sample, geometry_reasons)
+                plan_attempts.append(
+                    self._strategy_geometry_attempt(idx, attempted_item, attempted_plan, geometry_sample, geometry_reasons)
+                )
+                if selected_plan is None:
+                    selected_item = attempted_item
+                    selected_plan = attempted_plan
+                    selected_provider = "strategy_geometry_gate"
+                    selected_plan_reason = geometry_reasons[0]
+                continue
+            attempted_plan = await self._generate_plan(
+                attempted_item,
+                performance,
+                candidate_source,
+                candidate_attempts,
+                strategy_geometry_sample=geometry_sample,
+            )
             attempted_provider = _plan_provider(attempted_plan)
             attempted_ok, attempted_reason = strategy_validator.validate(attempted_plan)
             attempted_ai_generated = _accepted_strategy_provider(attempted_provider)
@@ -771,6 +813,7 @@ class ProductionAcceptanceRunner:
                     "validation_ok": attempted_ok,
                     "validation_reason": attempted_reason,
                     "opens": plan_can_open,
+                    "strategy_geometry_sample": geometry_sample,
                     "plan": _plan_snapshot(attempted_plan),
                 }
             )
@@ -886,6 +929,102 @@ class ProductionAcceptanceRunner:
             raw={"provider": "generation_gate", "generation_gate": gate},
         )
 
+    async def _strategy_geometry_sample(self, item: RadarItem) -> dict[str, Any]:
+        try:
+            sample = await strategy_geometry_sampler.evaluate(item)
+        except Exception as exc:
+            return {
+                "enabled": True,
+                "status": "unavailable",
+                "reason": f"geometry_sample_error:{type(exc).__name__}",
+                "symbol": item.symbol,
+                "side": item.direction,
+                "samples": {"sample_count": 0, "pass_gate": False},
+            }
+        if isinstance(sample, dict):
+            return sample
+        return {
+            "enabled": True,
+            "status": "unavailable",
+            "reason": "invalid_geometry_sample",
+            "symbol": item.symbol,
+            "side": item.direction,
+            "samples": {"sample_count": 0, "pass_gate": False},
+        }
+
+    def _strategy_geometry_reasons(self, sample: dict[str, Any]) -> list[str]:
+        samples = sample.get("samples") if isinstance(sample.get("samples"), dict) else {}
+        reasons: list[str] = []
+        if sample.get("status") != "ok" or not bool(samples.get("pass_gate")):
+            reasons.append("strategy_geometry_sample_not_ok")
+        sample_count = _safe_int(samples.get("sample_count"))
+        min_sample_count = max(60, int(getattr(settings, "event_calibration_min_samples", 20) or 20))
+        if sample_count < min_sample_count:
+            reasons.append("strategy_geometry_sample_count_low")
+        if _safe_float(samples.get("win_rate")) < float(settings.strategy_min_paper_win_rate):
+            reasons.append("strategy_geometry_win_rate_low")
+        if _safe_float(samples.get("expected_r")) < float(settings.strategy_min_expected_r):
+            reasons.append("strategy_geometry_expected_r_low")
+        if _safe_float(samples.get("profit_factor")) < STRATEGY_GEOMETRY_MIN_PROFIT_FACTOR:
+            reasons.append("strategy_geometry_profit_factor_low")
+        return list(dict.fromkeys(reasons))
+
+    def _strategy_geometry_wait_plan(self, item: RadarItem, sample: dict[str, Any], reasons: list[str]) -> StrategyPlan:
+        reason = "strategy_geometry_gate_blocked"
+        if reasons:
+            reason = f"{reason}:{','.join(reasons[:6])}"
+        price = float(item.price or 0.0)
+        return StrategyPlan(
+            strategy_id=f"strategy_geometry_wait_{item.symbol}_{now_ms()}",
+            action="WAIT",
+            symbol=item.symbol,
+            side="NEUTRAL",
+            entry_zone_low=price,
+            entry_zone_high=price,
+            ideal_entry_price=price,
+            stop_loss=0.0,
+            tp1=0.0,
+            tp2=0.0,
+            confidence=0.0,
+            reason=reason,
+            wait_type="STRATEGY_GEOMETRY_GATE_BLOCKED",
+            expire_after_seconds=300,
+            raw={
+                "provider": "strategy_geometry_gate",
+                "strategy_geometry_sample": sample,
+                "strategy_geometry_reasons": reasons,
+            },
+        )
+
+    def _strategy_geometry_attempt(
+        self,
+        attempt: int,
+        item: RadarItem,
+        plan: StrategyPlan,
+        sample: dict[str, Any],
+        reasons: list[str],
+    ) -> dict[str, Any]:
+        return {
+            "attempt": attempt,
+            "symbol": item.symbol,
+            "side": item.direction,
+            "rank": item.rank,
+            "score": item.score,
+            "fund_confirm": f"{item.fund_confirm_count}/{item.fund_confirm_total}",
+            "fake_breakout_risk": item.fake_breakout_risk,
+            "provider": "strategy_geometry_gate",
+            "action": plan.action,
+            "confidence": plan.confidence,
+            "reason": plan.reason,
+            "wait_type": plan.wait_type,
+            "validation_ok": False,
+            "validation_reason": reasons[0] if reasons else "strategy_geometry_sample_not_ok",
+            "opens": False,
+            "strategy_geometry_reasons": reasons,
+            "strategy_geometry_sample": sample,
+            "plan": _plan_snapshot(plan),
+        }
+
     def _live_gate(self, mode: str, readiness: dict[str, Any]) -> tuple[bool, str]:
         if settings.trade_mode != "live":
             return False, "trade_mode_not_live"
@@ -980,6 +1119,20 @@ def _provider_status(ai_status: dict[str, Any]) -> dict[str, Any]:
 
 def _gate_reasons(gate: dict[str, Any]) -> list[str]:
     return [str(reason) for reason in gate.get("reasons") or [] if str(reason)]
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _plan_provider(plan: StrategyPlan) -> str:
