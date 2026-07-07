@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import asdict
 from typing import Any
 
@@ -44,6 +45,60 @@ class ProductionAcceptanceRunner:
     def __init__(self) -> None:
         self.last_report: dict[str, Any] = db.get_kv("production_acceptance.last_report", {})
         self.in_progress = False
+
+    def status(self) -> dict[str, Any]:
+        report = copy.deepcopy(self.last_report) if isinstance(self.last_report, dict) and self.last_report else self._empty_report()
+        validation = self._current_validation(report)
+        report["current_validation"] = validation
+        acceptance = report.setdefault("production_acceptance", {})
+        acceptance["currently_valid"] = validation["currently_valid"]
+        acceptance["invalidated_by"] = validation["invalidated_by"]
+        if not validation["currently_valid"]:
+            report["ok"] = False
+            acceptance["passed"] = False
+            result = report.setdefault("result", {})
+            result.setdefault("blocked", validation["invalidated_by"][0] if validation["invalidated_by"] else "production_acceptance_not_currently_valid")
+        return report
+
+    def _empty_report(self) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "mode": "none",
+            "production_acceptance": {"passed": False},
+            "stages": [],
+            "result": {"blocked": "not_run"},
+        }
+
+    def _current_validation(self, report: dict[str, Any]) -> dict[str, Any]:
+        invalidated_by: list[str] = []
+        acceptance = report.get("production_acceptance") if isinstance(report.get("production_acceptance"), dict) else {}
+        passed = bool(report.get("ok") and acceptance.get("passed"))
+        mode = str(report.get("mode") or "")
+        finished_ms = int(report.get("finished_ms") or 0)
+        max_age_ms = max(1, int(settings.production_acceptance_max_age_seconds or 3600)) * 1000
+        age_ms = max(0, now_ms() - finished_ms) if finished_ms > 0 else 0
+        if not passed:
+            invalidated_by.append("production_acceptance_not_passed")
+        if passed and mode != "real_order":
+            invalidated_by.append("production_acceptance_mode_not_real_order")
+        if passed and finished_ms <= 0:
+            invalidated_by.append("production_acceptance_missing_finished_ms")
+        elif passed and age_ms > max_age_ms:
+            invalidated_by.append("production_acceptance_stale")
+        data_quality = learning_data_audit.cached_summary()
+        if not bool(data_quality.get("production_grade")):
+            invalidated_by.append("learning_data_not_production_grade")
+        return {
+            "currently_valid": not invalidated_by,
+            "invalidated_by": invalidated_by,
+            "age_seconds": round(age_ms / 1000.0, 3) if finished_ms > 0 else None,
+            "max_age_seconds": max_age_ms // 1000,
+            "learning_data_audit": {
+                "production_grade": bool(data_quality.get("production_grade")),
+                "trust_level": data_quality.get("trust_level"),
+                "reasons": list(data_quality.get("reasons") or []),
+            },
+        }
 
     async def run(
         self,

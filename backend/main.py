@@ -1363,13 +1363,7 @@ async def api_trade_director_acceptance_production(payload: ProductionAcceptance
 
 @app.get("/api/trade-director/acceptance/production")
 async def api_trade_director_acceptance_production_status():
-    return production_acceptance_runner.last_report or {
-        "ok": False,
-        "mode": "none",
-        "production_acceptance": {"passed": False},
-        "stages": [],
-        "result": {"blocked": "not_run"},
-    }
+    return production_acceptance_runner.status()
 
 @app.get("/api/autotrade/params")
 async def api_autotrade_params():

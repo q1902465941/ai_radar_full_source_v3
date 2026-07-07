@@ -8584,6 +8584,69 @@ def test_autotrader_real_live_guard_requires_recent_real_order_acceptance(monkey
     assert reason == "ok"
 
 
+def test_production_acceptance_status_invalidates_pass_when_current_learning_data_is_low(monkeypatch):
+    production_acceptance_runner.last_report = {
+        "ok": True,
+        "mode": "real_order",
+        "finished_ms": now_ms(),
+        "production_acceptance": {"passed": True},
+        "stages": [],
+        "result": {},
+    }
+    monkeypatch.setattr(settings, "production_acceptance_max_age_seconds", 60)
+
+    cached_audit_calls = []
+
+    def fake_cached_audit_summary():
+        cached_audit_calls.append(True)
+        return {
+            "production_grade": False,
+            "trust_level": "LOW",
+            "reasons": ["real_closed_samples_low", "market_backtest_missing"],
+        }
+
+    monkeypatch.setattr(
+        learning_data_audit,
+        "cached_summary",
+        fake_cached_audit_summary,
+    )
+
+    out = asyncio.run(main_module.api_trade_director_acceptance_production_status())
+
+    assert out["ok"] is False
+    assert out["production_acceptance"]["passed"] is False
+    assert out["production_acceptance"]["currently_valid"] is False
+    assert "learning_data_not_production_grade" in out["current_validation"]["invalidated_by"]
+    assert out["current_validation"]["learning_data_audit"]["trust_level"] == "LOW"
+    assert cached_audit_calls == [True]
+
+
+def test_production_acceptance_status_does_not_recompute_uncached_learning_audit(monkeypatch):
+    production_acceptance_runner.last_report = {
+        "ok": True,
+        "mode": "real_order",
+        "finished_ms": now_ms(),
+        "production_acceptance": {"passed": True},
+        "stages": [],
+        "result": {},
+    }
+    monkeypatch.setattr(settings, "production_acceptance_max_age_seconds", 60)
+    learning_data_audit.clear_cache()
+
+    def fail_summary(force=False, limit=5000):
+        raise AssertionError("status endpoint must not recompute full data audit")
+
+    monkeypatch.setattr(learning_data_audit, "summary", fail_summary)
+
+    out = asyncio.run(main_module.api_trade_director_acceptance_production_status())
+
+    assert out["ok"] is False
+    assert out["production_acceptance"]["passed"] is False
+    assert "learning_data_not_production_grade" in out["current_validation"]["invalidated_by"]
+    assert out["current_validation"]["learning_data_audit"]["trust_level"] == "UNKNOWN"
+    assert out["current_validation"]["learning_data_audit"]["reasons"] == ["learning_data_audit_cache_empty"]
+
+
 def test_autotrader_real_live_guard_blocks_after_unprotected_live_freeze(monkeypatch):
     monkeypatch.setattr(settings, "trade_mode", "live")
     monkeypatch.setattr(settings, "live_trading_enabled", True)

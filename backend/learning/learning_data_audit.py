@@ -31,6 +31,20 @@ class LearningDataAudit:
         self._cache_until = 0.0
         self._cache = {}
 
+    def cached_summary(self) -> dict[str, Any]:
+        if self._cache:
+            return self._cache
+        return {
+            "production_grade": False,
+            "trust_level": "UNKNOWN",
+            "can_hard_block_from_learning": False,
+            "reasons": ["learning_data_audit_cache_empty"],
+            "sources": {},
+            "market_backtest": {"available": False, "quality_passed": False},
+            "learning_reset_at_ms": 0,
+            "instruction": "Refresh /api/learning/data-audit before treating production acceptance as current.",
+        }
+
     def summary(self, *, force: bool = False, limit: int | None = None) -> dict[str, Any]:
         now = time.time()
         if not force and now < self._cache_until and self._cache:
