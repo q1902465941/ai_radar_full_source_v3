@@ -1401,6 +1401,7 @@ def test_binance_http_clients_ignore_system_proxy_environment(monkeypatch):
         calls.append(kwargs)
         return FakeAsyncClient()
 
+    monkeypatch.setattr(settings, "binance_http_proxy", "http://proxy.local:7890", raising=False)
     monkeypatch.setattr("backend.exchange.binance_futures.httpx.AsyncClient", fake_async_client)
     client = BinanceFuturesClient()
 
@@ -1409,6 +1410,29 @@ def test_binance_http_clients_ignore_system_proxy_environment(monkeypatch):
 
     assert calls[0]["trust_env"] is False
     assert calls[1]["trust_env"] is False
+    assert calls[0]["proxy"] == "http://proxy.local:7890"
+    assert calls[1]["proxy"] == "http://proxy.local:7890"
+
+
+def test_binance_testnet_fallback_client_uses_configured_proxy(monkeypatch):
+    from backend.market.binance_rest import BinanceRestCompat
+
+    calls = []
+
+    class FakeAsyncClient:
+        pass
+
+    def fake_async_client(**kwargs):
+        calls.append(kwargs)
+        return FakeAsyncClient()
+
+    monkeypatch.setattr(settings, "binance_http_proxy", "http://proxy.local:7890", raising=False)
+    monkeypatch.setattr("backend.market.binance_rest.httpx.AsyncClient", fake_async_client)
+
+    asyncio.run(BinanceRestCompat()._fallback_client())
+
+    assert calls[0]["trust_env"] is False
+    assert calls[0]["proxy"] == "http://proxy.local:7890"
 
 
 def test_binance_public_get_preserves_empty_connect_error_endpoint(monkeypatch):

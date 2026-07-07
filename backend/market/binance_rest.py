@@ -8,6 +8,7 @@ from backend.config import settings
 from backend.exchange.binance_futures import (
     BinanceAPIError,
     binance_futures,
+    binance_http_proxy,
     binance_http_limits,
     binance_http_timeout,
 )
@@ -101,6 +102,7 @@ class BinanceRestCompat:
         self._testnet_client = httpx.AsyncClient(
             timeout=binance_http_timeout(),
             limits=binance_http_limits(),
+            proxy=binance_http_proxy(),
             trust_env=False,
         )
         self._testnet_client_loop_id = loop_id

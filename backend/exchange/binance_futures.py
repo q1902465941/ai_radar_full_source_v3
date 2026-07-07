@@ -130,6 +130,7 @@ class BinanceFuturesClient:
             self._signed_client = httpx.AsyncClient(
                 timeout=binance_signed_http_timeout(),
                 limits=binance_signed_http_limits(),
+                proxy=binance_http_proxy(),
                 trust_env=False,
             )
             self._signed_client_loop_id = loop_id
@@ -145,6 +146,7 @@ class BinanceFuturesClient:
         self._public_client = httpx.AsyncClient(
             timeout=binance_http_timeout(),
             limits=binance_http_limits(),
+            proxy=binance_http_proxy(),
             trust_env=False,
         )
         self._public_client_loop_id = loop_id
@@ -438,6 +440,11 @@ def _http_error_detail(exc: httpx.HTTPError, url: str) -> str:
     if message:
         return f"{type(exc).__name__}:{message}"
     return f"{type(exc).__name__}:{redact_sensitive_url(url)}"
+
+
+def binance_http_proxy() -> str | None:
+    value = str(settings.binance_http_proxy or "").strip()
+    return value or None
 
 
 binance_futures = BinanceFuturesClient()

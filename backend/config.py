@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     binance_api_secret: str = ""
     binance_recv_window: int = 5000
     binance_http_timeout: float = 5.0
+    binance_http_proxy: str = ""
     binance_margin_type: str = "ISOLATED"  # ISOLATED | CROSSED
     binance_symbol_limit: int = 80
     binance_mover_share: float = 0.30
