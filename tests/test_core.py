@@ -158,27 +158,22 @@ def default_disable_event_calibration(monkeypatch):
     db.set_kv("live_executor.trading_freeze", previous_trading_freeze)
 
 
-def test_state_uses_realtime_quotes_for_major_prices_when_snapshots_missing(monkeypatch):
+def test_state_uses_ws_ticker_prices_for_major_prices_when_snapshots_missing(monkeypatch):
     market_service.last_snapshots = {}
     monkeypatch.setattr(binance_rest, "last_public_source", "mainnet")
+    monkeypatch.setattr(
+        main_module.binance_ticker_stream,
+        "snapshot_rows",
+        lambda: [
+            {"symbol": "BTCUSDT", "lastPrice": "62661.9"},
+            {"symbol": "ETHUSDT", "lastPrice": "3100.5"},
+            {"symbol": "BNBUSDT", "lastPrice": "720.25"},
+            {"symbol": "SOLUSDT", "lastPrice": "182.75"},
+        ],
+    )
 
     async def fake_price_quote(symbol_arg, side_arg=None):
-        prices = {
-            "BTCUSDT": 62661.9,
-            "ETHUSDT": 3100.5,
-            "BNBUSDT": 720.25,
-            "SOLUSDT": 182.75,
-        }
-        return PriceQuote(
-            symbol=symbol_arg,
-            price=prices[symbol_arg],
-            source="book_ticker_mid",
-            ts_ms=now_ms(),
-            age_seconds=0.0,
-            stale=False,
-            bid=prices[symbol_arg] - 0.01,
-            ask=prices[symbol_arg] + 0.01,
-        )
+        raise AssertionError("/api/state must not wait for live price_quote")
 
     monkeypatch.setattr(market_service, "price_quote", fake_price_quote)
 
@@ -187,7 +182,7 @@ def test_state_uses_realtime_quotes_for_major_prices_when_snapshots_missing(monk
 
     assert out["market_data_source"] == "mainnet"
     assert majors["BTCUSDT"]["price"] == 62661.9
-    assert majors["BTCUSDT"]["source"] == "book_ticker_mid"
+    assert majors["BTCUSDT"]["source"] == "ws_ticker_last_price"
     assert majors["BTCUSDT"]["stale"] is False
 
 
@@ -198,20 +193,13 @@ def test_state_uses_ws_ticker_change_for_major_when_snapshots_missing(monkeypatc
         main_module.binance_ticker_stream,
         "snapshot_rows",
         lambda: [
-            {"symbol": "BTCUSDT", "priceChangePercent": "1.23", "quoteVolume": "1234567"},
-            {"symbol": "ETHUSDT", "priceChangePercent": "-0.45", "quoteVolume": "7654321"},
+            {"symbol": "BTCUSDT", "lastPrice": "62661.9", "priceChangePercent": "1.23", "quoteVolume": "1234567"},
+            {"symbol": "ETHUSDT", "lastPrice": "100.0", "priceChangePercent": "-0.45", "quoteVolume": "7654321"},
         ],
     )
 
     async def fake_price_quote(symbol_arg, side_arg=None):
-        return PriceQuote(
-            symbol=symbol_arg,
-            price=62661.9 if symbol_arg == "BTCUSDT" else 100.0,
-            source="book_ticker_mid",
-            ts_ms=now_ms(),
-            age_seconds=0.0,
-            stale=False,
-        )
+        raise AssertionError("/api/state must not wait for live price_quote")
 
     monkeypatch.setattr(market_service, "price_quote", fake_price_quote)
 
@@ -226,22 +214,19 @@ def test_state_uses_ws_ticker_change_for_major_when_snapshots_missing(monkeypatc
     assert majors["ETHUSDT"]["change"] == -0.45
 
 
-def test_state_prefers_realtime_quote_over_cached_major_snapshot(monkeypatch):
+def test_state_prefers_ws_ticker_price_over_cached_major_snapshot(monkeypatch):
     market_service.last_snapshots = {
         "BTCUSDT": MarketSnapshot("BTCUSDT", 1.0, 0.7, 0.8, 0.9, 1, 0, 0, 0.5, 0.5, 0, 0.1, 0.1)
     }
     monkeypatch.setattr(binance_rest, "last_public_source", "mainnet")
+    monkeypatch.setattr(
+        main_module.binance_ticker_stream,
+        "snapshot_rows",
+        lambda: [{"symbol": "BTCUSDT", "lastPrice": "62661.9"}],
+    )
 
     async def fake_price_quote(symbol_arg, side_arg=None):
-        price = 62661.9 if symbol_arg == "BTCUSDT" else 100.0
-        return PriceQuote(
-            symbol=symbol_arg,
-            price=price,
-            source="book_ticker_mid",
-            ts_ms=now_ms(),
-            age_seconds=0.0,
-            stale=False,
-        )
+        raise AssertionError("/api/state must not wait for live price_quote")
 
     monkeypatch.setattr(market_service, "price_quote", fake_price_quote)
 
@@ -250,7 +235,13 @@ def test_state_prefers_realtime_quote_over_cached_major_snapshot(monkeypatch):
 
     assert majors["BTCUSDT"]["price"] == 62661.9
     assert majors["BTCUSDT"]["change"] == 0.7
-    assert majors["BTCUSDT"]["source"] == "book_ticker_mid"
+    assert majors["BTCUSDT"]["source"] == "ws_ticker_last_price"
+
+
+def test_legacy_backend_health_endpoint_is_lightweight():
+    out = asyncio.run(main_module.api_health())
+
+    assert out == {"ok": True, "service": "ai-radar-monitor", "version": "legacy"}
 
 
 def test_state_exposes_market_data_contract_for_monitor_debugging(monkeypatch):

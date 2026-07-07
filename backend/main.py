@@ -260,6 +260,12 @@ def _ws_ticker_rows_by_symbol(symbols: list[str]) -> dict[str, dict[str, Any]]:
     return rows
 
 
+def _ticker_last_price(row: dict[str, Any]) -> float:
+    if not isinstance(row, dict):
+        return 0.0
+    return _optional_float(row.get("lastPrice")) or 0.0
+
+
 def _light_trade_director_status(
     *,
     candidate_source: str,
@@ -400,20 +406,29 @@ async def _state_major_rows() -> list[dict[str, Any]]:
         ("SOLUSDT", "SOL 永续"),
     ]
     ticker_rows = _ws_ticker_rows_by_symbol([sym for sym, _ in specs])
-    quotes = await asyncio.gather(
-        *(market_service.price_quote(sym) for sym, _ in specs),
-        return_exceptions=True,
-    )
     rows = []
-    for (sym, label), quote in zip(specs, quotes):
+    for sym, label in specs:
         snapshot = market_service.last_snapshots.get(sym)
         ticker_row = ticker_rows.get(sym) or {}
-        quote_failed = isinstance(quote, Exception)
-        quote_price = 0.0 if quote_failed else float(getattr(quote, "price", 0.0) or 0.0)
+        cached_quote = market_service.cached_price_quote(sym)
+        ticker_price = _ticker_last_price(ticker_row)
+        cached_price = float(getattr(cached_quote, "price", 0.0) or 0.0)
         snapshot_price = snapshot.price if snapshot and snapshot.price > 0 else 0.0
         change_5m = _optional_float(getattr(snapshot, "change_5m", None)) if snapshot else None
         change_24h = _optional_float(ticker_row.get("priceChangePercent"))
         quote_volume_24h = _optional_float(ticker_row.get("quoteVolume"))
+        if ticker_price > 0:
+            price = ticker_price
+            source = "ws_ticker_last_price"
+            stale = False
+            error = ""
+            price_age_seconds = 0.0
+        else:
+            price = cached_price if cached_price > 0 else snapshot_price
+            source = getattr(cached_quote, "source", "snapshot_cache" if snapshot else "unavailable")
+            stale = bool(getattr(cached_quote, "stale", True))
+            error = str(getattr(cached_quote, "error", "") or "")
+            price_age_seconds = float(getattr(cached_quote, "age_seconds", 999999.0) or 999999.0)
         if change_5m is not None:
             change = change_5m
             change_source = "snapshot_5m"
@@ -429,19 +444,19 @@ async def _state_major_rows() -> list[dict[str, Any]]:
         rows.append({
             "symbol": sym,
             "label": label,
-            "price": quote_price if quote_price > 0 else snapshot_price,
+            "price": price,
             "change": change,
             "change_5m": change_5m,
             "change_24h": change_24h,
             "change_source": change_source,
             "change_label": change_label,
             "quote_volume_24h": quote_volume_24h,
-            "source": "quote_error" if quote_failed else getattr(quote, "source", "snapshot_cache" if snapshot else "unavailable"),
-            "stale": True if quote_failed else bool(getattr(quote, "stale", False)),
-            "error": type(quote).__name__ if quote_failed else getattr(quote, "error", ""),
-            "bid": 0.0 if quote_failed else float(getattr(quote, "bid", 0.0) or 0.0),
-            "ask": 0.0 if quote_failed else float(getattr(quote, "ask", 0.0) or 0.0),
-            "price_age_seconds": 999999.0 if quote_failed else float(getattr(quote, "age_seconds", 999999.0) or 0.0),
+            "source": source,
+            "stale": stale,
+            "error": error,
+            "bid": float(getattr(cached_quote, "bid", 0.0) or 0.0),
+            "ask": float(getattr(cached_quote, "ask", 0.0) or 0.0),
+            "price_age_seconds": price_age_seconds,
         })
     return rows
 
@@ -463,6 +478,11 @@ async def state():
         "market_data":market_data,
         "top50_count":market_data["top50_count"],
     }
+
+
+@app.get("/api/health")
+async def api_health():
+    return {"ok": True, "service": "ai-radar-monitor", "version": "legacy"}
 
 @app.get("/api/radar")
 async def api_radar():

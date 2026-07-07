@@ -23,7 +23,8 @@ def test_docker_compose_defines_frontend_backend_and_migrations():
 def test_docker_compose_defines_service_healthchecks():
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
-    assert "/api/state" in compose
+    assert "socket.create_connection(('127.0.0.1', 8001), timeout=5)" in compose
+    assert "/api/state" not in compose
     assert "/api/v2/health" in compose
     assert "condition: service_healthy" in compose
     assert "healthcheck:" in compose
