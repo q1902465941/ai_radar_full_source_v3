@@ -220,25 +220,36 @@ class ProductionAcceptanceRunner:
         review_candidates = []
         geometry_candidate_reports: list[dict[str, Any]] = []
         candidate_geometry_samples: dict[str, dict[str, Any]] = {}
+        candidate_source = "strict"
         for attempt in range(1, PRODUCTION_ACCEPTANCE_SCAN_ATTEMPTS + 1):
             configured_candidates, configured_source = autotrader._candidate_batch(performance)
             candidates = radar_engine.select_ai_candidates(radar_engine.top50)
             review_candidates = radar_engine.select_ai_review_candidates(radar_engine.top50)
-            candidate_attempts.append(
-                {
-                    "attempt": attempt,
-                    "last_scan_id": radar_engine.last_scan_id,
-                    "last_scan_time": radar_engine.last_scan_time,
-                    "strict_count": len(candidates),
-                    "strict_symbols": [item.symbol for item in candidates],
-                    "strict_review_count": len(review_candidates),
-                    "strict_review_symbols": [item.symbol for item in review_candidates[:5]],
-                    "configured_candidate_source": configured_source,
-                    "configured_candidate_symbols": [item.symbol for item in configured_candidates],
-                }
-            )
+            attempt_evidence = {
+                "attempt": attempt,
+                "last_scan_id": radar_engine.last_scan_id,
+                "last_scan_time": radar_engine.last_scan_time,
+                "strict_count": len(candidates),
+                "strict_symbols": [item.symbol for item in candidates],
+                "strict_review_count": len(review_candidates),
+                "strict_review_symbols": [item.symbol for item in review_candidates[:5]],
+                "configured_candidate_source": configured_source,
+                "configured_candidate_symbols": [item.symbol for item in configured_candidates],
+            }
+            candidate_attempts.append(attempt_evidence)
             if candidates:
-                break
+                candidates, geometry_candidate_reports, candidate_geometry_samples = await self._geometry_rank_candidates(
+                    candidates,
+                    candidate_source,
+                    performance,
+                )
+                attempt_evidence["geometry_ranked_symbols"] = [item.symbol for item in candidates]
+                attempt_evidence["geometry_candidate_reports"] = geometry_candidate_reports
+                if self._has_strategy_geometry_supported_candidate(candidates, candidate_geometry_samples):
+                    break
+                attempt_evidence["geometry_retry_reason"] = "no_geometry_supported_strict_candidate"
+                if attempt >= PRODUCTION_ACCEPTANCE_SCAN_ATTEMPTS:
+                    break
             if attempt < PRODUCTION_ACCEPTANCE_SCAN_ATTEMPTS:
                 await asyncio.sleep(PRODUCTION_ACCEPTANCE_SCAN_RETRY_SECONDS)
                 try:
@@ -249,16 +260,6 @@ class ProductionAcceptanceRunner:
                 except Exception as exc:
                     candidate_attempts[-1]["retry_scan_error"] = _err(exc)
                     break
-        candidate_source = "strict"
-        if candidates:
-            candidates, geometry_candidate_reports, candidate_geometry_samples = await self._geometry_rank_candidates(
-                candidates,
-                candidate_source,
-                performance,
-            )
-            if candidate_attempts:
-                candidate_attempts[-1]["geometry_ranked_symbols"] = [item.symbol for item in candidates]
-                candidate_attempts[-1]["geometry_candidate_reports"] = geometry_candidate_reports
         production_candidate_ok = bool(candidates)
         stages.append(
             self._stage(
@@ -536,7 +537,9 @@ class ProductionAcceptanceRunner:
             "open_positions": len(position_registry.list_open()),
             "performance_guard": performance,
             "candidate_selection": {
-                "source": candidate_source,
+                "source": "production_acceptance",
+                "candidate_source": candidate_source,
+                "acceptance_mode": True,
                 "production_acceptance": True,
                 "strict_candidate": candidate_source == "strict",
                 "attempts": candidate_attempts,
@@ -1036,6 +1039,19 @@ class ProductionAcceptanceRunner:
         if _safe_float(samples.get("profit_factor")) < STRATEGY_GEOMETRY_MIN_PROFIT_FACTOR:
             reasons.append("strategy_geometry_profit_factor_low")
         return list(dict.fromkeys(reasons))
+
+    def _has_strategy_geometry_supported_candidate(
+        self,
+        candidates: list[RadarItem],
+        candidate_geometry_samples: dict[str, dict[str, Any]],
+    ) -> bool:
+        if not candidates or not isinstance(candidate_geometry_samples, dict):
+            return False
+        for item in candidates:
+            sample = candidate_geometry_samples.get(item.symbol)
+            if isinstance(sample, dict) and sample and not self._strategy_geometry_reasons(sample):
+                return True
+        return False
 
     def _strategy_geometry_wait_plan(self, item: RadarItem, sample: dict[str, Any], reasons: list[str]) -> StrategyPlan:
         reason = "strategy_geometry_gate_blocked"
