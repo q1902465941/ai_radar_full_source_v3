@@ -32,6 +32,18 @@ PRODUCTION_ACCEPTANCE_MODES = {"preflight", "exchange_test_order", "real_order"}
 PRODUCTION_ACCEPTANCE_SCAN_ATTEMPTS = 3
 PRODUCTION_ACCEPTANCE_SCAN_RETRY_SECONDS = 2.0
 PRODUCTION_ACCEPTANCE_SCAN_TIMEOUT_SECONDS = 90.0
+PRODUCTION_ACCEPTANCE_REQUIRED_STAGES = [
+    "scan",
+    "learning_data_audit",
+    "candidate_selection",
+    "ai_strategy_plan",
+    "risk_model",
+    "live_readiness",
+    "exchange_order_submitted",
+    "learning_open_recorded",
+    "position_manager_review",
+    "learning_close_recorded",
+]
 
 
 class ProductionAcceptanceRunner:
@@ -85,12 +97,22 @@ class ProductionAcceptanceRunner:
             invalidated_by.append("production_acceptance_missing_finished_ms")
         elif passed and age_ms > max_age_ms:
             invalidated_by.append("production_acceptance_stale")
+        stage_rows = report.get("stages") if isinstance(report.get("stages"), list) else []
+        by_name = {stage.get("name"): stage for stage in stage_rows if isinstance(stage, dict)}
+        missing_stages = [
+            name
+            for name in PRODUCTION_ACCEPTANCE_REQUIRED_STAGES
+            if not bool(by_name.get(name, {}).get("ok"))
+        ]
+        if passed and missing_stages:
+            invalidated_by.append("production_acceptance_evidence_incomplete")
         data_quality = learning_data_audit.cached_summary()
         if not bool(data_quality.get("production_grade")):
             invalidated_by.append("learning_data_not_production_grade")
         return {
             "currently_valid": not invalidated_by,
             "invalidated_by": invalidated_by,
+            "missing_stages": missing_stages,
             "age_seconds": round(age_ms / 1000.0, 3) if finished_ms > 0 else None,
             "max_age_seconds": max_age_ms // 1000,
             "learning_data_audit": {
@@ -813,20 +835,8 @@ class ProductionAcceptanceRunner:
         return position_id in set(forward.get("closed_position_ids") or [])
 
     def _report(self, *, mode: str, started_ms: int, stages: list[dict[str, Any]], result: dict[str, Any]) -> dict[str, Any]:
-        required = [
-            "scan",
-            "learning_data_audit",
-            "candidate_selection",
-            "ai_strategy_plan",
-            "risk_model",
-            "live_readiness",
-            "exchange_order_submitted",
-            "learning_open_recorded",
-            "position_manager_review",
-            "learning_close_recorded",
-        ]
         by_name = {stage["name"]: stage for stage in stages}
-        passed = mode == "real_order" and all(by_name.get(name, {}).get("ok") for name in required)
+        passed = mode == "real_order" and all(by_name.get(name, {}).get("ok") for name in PRODUCTION_ACCEPTANCE_REQUIRED_STAGES)
         return {
             "ok": passed,
             "mode": mode,

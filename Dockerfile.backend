@@ -48,6 +48,7 @@ COPY meta ./meta
 COPY portfolio ./portfolio
 COPY runtime ./runtime
 COPY strategy ./strategy
+COPY trading_lab ./trading_lab
 COPY run_v2.py .
 
 EXPOSE 8001

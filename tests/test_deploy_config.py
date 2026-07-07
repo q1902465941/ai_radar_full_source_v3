@@ -304,6 +304,8 @@ def test_dockerignore_preserves_data_artifacts_for_backend_image():
     assert "data/*.sqlite3" in dockerignore
     assert "data/*.sqlite3-*" in dockerignore
     assert "data/*.sqlite3.*" in dockerignore
+    assert "trading_lab/.venv_jesse/" in dockerignore
+    assert "trading_lab/data/" in dockerignore
 
 
 def test_gitignore_excludes_local_codex_mount_directory():
@@ -318,6 +320,7 @@ def test_backend_dockerfile_uses_production_web_server():
     assert "ARG PYTHON_IMAGE=python:3.12-slim" in dockerfile
     assert "gunicorn" in dockerfile
     assert "uvicorn.workers.UvicornWorker" in dockerfile
+    assert "COPY trading_lab ./trading_lab" in dockerfile
 
 
 def test_backend_dockerfile_installs_codex_cli_for_strategy_generation():

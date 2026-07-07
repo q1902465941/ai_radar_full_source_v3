@@ -16,6 +16,8 @@ data/*.sqlite3
 data/*.sqlite3-*
 data/*.sqlite3.*
 data/__pycache__/
+trading_lab/.venv_jesse/
+trading_lab/data/
 tmp_ui_review/
 .env
 .git/
