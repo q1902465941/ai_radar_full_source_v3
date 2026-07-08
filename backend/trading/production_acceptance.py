@@ -1172,9 +1172,26 @@ class ProductionAcceptanceRunner:
                 continue
             if float(getattr(feature, "selection_score", 0.0) or 0.0) < 68.0:
                 continue
+            if not self._strict_geometry_feedback_ok(item):
+                continue
             scored.append((radar_engine._production_candidate_rank(item, feature), item))
         scored.sort(key=lambda row: row[0], reverse=True)
         return [item for _, item in scored]
+
+    def _strict_geometry_feedback_ok(self, item: RadarItem) -> bool:
+        try:
+            feedback = ai_strategy_feedback.evaluate_candidate(item)
+        except Exception:
+            return False
+        if not isinstance(feedback, dict):
+            return False
+        if feedback.get("avoid_repeating"):
+            return False
+        review_lessons = feedback.get("review_lessons") if isinstance(feedback.get("review_lessons"), list) else []
+        if not review_lessons:
+            return True
+        delta = feedback.get("candidate_learning_delta") if isinstance(feedback.get("candidate_learning_delta"), dict) else {}
+        return bool(delta.get("material_improvements_vs_losses"))
 
     async def _strategy_geometry_sample(
         self,

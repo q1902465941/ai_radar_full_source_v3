@@ -8372,6 +8372,46 @@ def test_production_acceptance_uses_strict_geometry_candidate_when_only_cyqnt_bl
     assert stages["ai_strategy_plan"]["evidence"]["provider"] == "codex_cli"
 
 
+def test_strict_geometry_candidates_require_review_material_improvements(monkeypatch):
+    reviewed = high_quality_item(symbol="REVIEWNOMATERIALUSDT", side="SHORT", price=100)
+    clean = high_quality_item(symbol="CLEANMATERIALUSDT", side="SHORT", price=100)
+    feature = SimpleNamespace(
+        feature_score=100.0,
+        estimated_win_rate=0.41,
+        selection_score=82.0,
+        reasons=["historical_negative_estimate_capped"],
+    )
+
+    monkeypatch.setattr(radar_engine, "_production_candidate_check", lambda candidate: (False, feature, ["cyqnt_win_rate_low"]))
+
+    def fake_feedback(candidate):
+        if candidate.symbol == reviewed.symbol:
+            return {
+                "quality_bias": "REVIEW",
+                "avoid_repeating": [],
+                "review_lessons": [{"name": "same_side"}],
+                "candidate_learning_delta": {
+                    "material_improvements_vs_losses": [],
+                    "overlaps_with_losing_risks": [{"name": "event_win_rate_low", "count": 3}],
+                },
+            }
+        return {
+            "quality_bias": "NEUTRAL",
+            "avoid_repeating": [],
+            "review_lessons": [],
+            "candidate_learning_delta": {
+                "material_improvements_vs_losses": [],
+                "overlaps_with_losing_risks": [],
+            },
+        }
+
+    monkeypatch.setattr(ai_strategy_feedback, "evaluate_candidate", fake_feedback)
+
+    candidates = production_acceptance_runner._strict_geometry_candidates([reviewed, clean])
+
+    assert [candidate.symbol for candidate in candidates] == [clean.symbol]
+
+
 def test_production_acceptance_shadow_reviews_when_no_strict_candidate(monkeypatch):
     review_item = high_quality_item(symbol="REVIEWUSDT", side="SHORT", price=100)
     review_item.fund_confirm_count = 2
