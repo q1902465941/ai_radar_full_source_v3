@@ -176,12 +176,12 @@ class ProductionAcceptanceRunner:
             self._store(report)
             return report
 
-        data_quality = learning_data_audit.summary(force=True)
+        data_quality = self._production_learning_data_audit()
         data_quality_ok = bool(data_quality.get("production_grade"))
         stages.append(self._stage("learning_data_audit", data_quality_ok, data_quality))
         if not data_quality_ok and not preflight_blocker:
             preflight_blocker = "learning_data_not_production_grade"
-        if not data_quality_ok and mode != "preflight":
+        if not data_quality_ok:
             report = self._report(
                 mode=mode,
                 started_ms=started_ms,
@@ -345,6 +345,15 @@ class ProductionAcceptanceRunner:
                 },
             )
         )
+        if preflight_blocker:
+            report = self._report(
+                mode=mode,
+                started_ms=started_ms,
+                stages=stages,
+                result=blocked_result("preflight_blocked_before_strategy_generation"),
+            )
+            self._store(report)
+            return report
         if not candidates:
             if review_candidates:
                 review_candidates, shadow_geometry_reports, shadow_geometry_samples = await self._geometry_rank_candidates(
@@ -627,6 +636,15 @@ class ProductionAcceptanceRunner:
             radar_engine.scan(force_refresh=force_refresh),
             timeout=PRODUCTION_ACCEPTANCE_SCAN_TIMEOUT_SECONDS,
         )
+
+    def _production_learning_data_audit(self) -> dict[str, Any]:
+        quick = learning_data_audit.summary(force=True, limit=self._quick_learning_audit_limit())
+        if not bool(quick.get("production_grade")):
+            return quick
+        return learning_data_audit.summary(force=True)
+
+    def _quick_learning_audit_limit(self) -> int:
+        return max(100, int(settings.trade_attribution_min_samples) * 3)
 
     def _mode_safety(self, mode: str, confirm_real_order: str) -> tuple[bool, str]:
         if mode == "real_order" and confirm_real_order != PRODUCTION_ACCEPTANCE_CONFIRM:

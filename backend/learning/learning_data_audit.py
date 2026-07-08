@@ -75,10 +75,6 @@ class LearningDataAudit:
         closed_total = sum(1 for row in raw_closed_rows if is_learning_close_reason(row.get("close_reason")))
         excluded_close_reason_counts = self._excluded_close_reason_counts(raw_closed_rows)
         closed_sample_providers = self._closed_sample_provider_counts(closed_samples)
-        radar = self._radar_summary()
-        reset_at_ms = self._learning_reset_at_ms()
-        market_backtest = self._apply_learning_reset_to_market_backtest(self._market_backtest_summary(), reset_at_ms)
-
         replay_count = len(replay_samples)
         closed_count = len(closed_samples)
         combined_count = replay_count + closed_count
@@ -86,6 +82,11 @@ class LearningDataAudit:
         min_closed = max(30, int(settings.trade_attribution_min_samples) * 3)
         min_radar_days = 14.0
         max_replay_ratio = 0.80
+        bounded_low_sample_audit = limit is not None and closed_count < min_closed
+        radar = self._radar_summary_fast() if bounded_low_sample_audit else self._radar_summary()
+        reset_at_ms = self._learning_reset_at_ms()
+        market_backtest = self._apply_learning_reset_to_market_backtest(self._market_backtest_summary(), reset_at_ms)
+
         market_backtest_passed = bool(market_backtest.get("quality_passed"))
         market_span_days = float(market_backtest.get("span_days") or 0.0)
         evidence_span_days = max(float(radar.get("span_days") or 0.0), market_span_days)
@@ -250,6 +251,44 @@ class LearningDataAudit:
             "rows": int(row["rows"] or 0),
             "distinct_scans": int(row["scans"] or 0),
             "distinct_symbols": int(row["symbols"] or 0),
+            "min_ts_ms": min_ts,
+            "max_ts_ms": max_ts,
+            "span_days": round(span_ms / 86_400_000.0, 4),
+        }
+
+    def _radar_summary_fast(self) -> dict[str, Any]:
+        try:
+            with db.conn() as conn:
+                row = conn.execute(
+                    """
+                    SELECT
+                        COUNT(*) AS rows,
+                        MIN(ts_ms) AS min_ts,
+                        MAX(ts_ms) AS max_ts
+                    FROM radar_snapshots
+                    """
+                ).fetchone()
+        except Exception as exc:
+            return {
+                "ok": False,
+                "quick": True,
+                "error": f"{type(exc).__name__}:{exc}",
+                "rows": 0,
+                "distinct_scans": 0,
+                "distinct_symbols": 0,
+                "min_ts_ms": 0,
+                "max_ts_ms": 0,
+                "span_days": 0.0,
+            }
+        min_ts = int(row["min_ts"] or 0)
+        max_ts = int(row["max_ts"] or 0)
+        span_ms = max(0, max_ts - min_ts)
+        return {
+            "ok": True,
+            "quick": True,
+            "rows": int(row["rows"] or 0),
+            "distinct_scans": 0,
+            "distinct_symbols": 0,
             "min_ts_ms": min_ts,
             "max_ts_ms": max_ts,
             "span_days": round(span_ms / 86_400_000.0, 4),
