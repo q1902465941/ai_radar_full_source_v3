@@ -8612,13 +8612,13 @@ def test_production_acceptance_prioritizes_geometry_supported_strict_candidates(
     out = asyncio.run(production_acceptance_runner.run(mode="preflight", manage_seconds=0))
     stages = {stage["name"]: stage for stage in out["stages"]}
 
-    assert stages["candidate_selection"]["evidence"]["candidate_symbols"] == [strong.symbol, weak.symbol]
+    assert stages["candidate_selection"]["evidence"]["candidate_symbols"] == [strong.symbol]
     assert stages["candidate_selection"]["evidence"]["geometry_candidate_reports"] == geometry_reports
+    assert stages["candidate_selection"]["evidence"]["geometry_rejected_symbols"] == [weak.symbol]
     assert seen == [(strong.symbol, strong_sample)]
     plan_attempts = stages["ai_strategy_plan"]["evidence"]["plan_attempts"]
-    assert [row["symbol"] for row in plan_attempts] == [strong.symbol, weak.symbol]
+    assert [row["symbol"] for row in plan_attempts] == [strong.symbol]
     assert plan_attempts[0]["strategy_geometry_sample"] == strong_sample
-    assert plan_attempts[1]["provider"] == "strategy_geometry_gate"
 
 
 def test_production_acceptance_rescans_when_strict_candidates_lack_geometry_support(monkeypatch):
@@ -8718,6 +8718,130 @@ def test_production_acceptance_rescans_when_strict_candidates_lack_geometry_supp
     assert [attempt["strict_symbols"] for attempt in evidence["candidate_attempts"]] == [[weak.symbol], [strong.symbol]]
     assert evidence["candidate_attempts"][0]["geometry_candidate_reports"][0]["geometry_status"] == "weak"
     assert evidence["candidate_attempts"][1]["geometry_candidate_reports"][0]["geometry_status"] == "ok"
+
+
+def test_production_acceptance_rejects_strict_candidates_without_geometry_support(monkeypatch):
+    weak = high_quality_item(symbol="ONLYWEAKGEOMETRYUSDT", side="LONG", price=100)
+    weak_sample = {
+        "status": "weak",
+        "sample_model": "first_touch_geometry_v1",
+        "symbol": weak.symbol,
+        "side": weak.direction,
+        "pass_count": 0,
+        "samples": {"sample_count": 119, "win_rate": 0.34, "expected_r": -0.03, "profit_factor": 0.72, "pass_gate": False},
+    }
+    scan_calls = []
+
+    async def fake_scan(force_refresh=False):
+        scan_calls.append(force_refresh)
+        radar_engine.top50 = [weak]
+        radar_engine.last_scan_id = f"scan_only_weak_geometry_{len(scan_calls)}"
+        radar_engine.last_scan_time = f"12:01:0{len(scan_calls)}"
+        return radar_engine.top50
+
+    async def fake_geometry_order(candidates, candidate_source, performance_context=None):
+        assert candidate_source == "strict"
+        autotrader._candidate_geometry_samples[weak.symbol] = weak_sample
+        return [weak], [
+            {
+                "symbol": weak.symbol,
+                "geometry_status": "weak",
+                "sample_count": 119,
+                "win_rate": 0.34,
+                "expected_r": -0.03,
+                "profit_factor": 0.72,
+                "pass_count": 0,
+            }
+        ]
+
+    async def fail_generate(*args, **kwargs):
+        raise AssertionError("geometry-unsupported strict candidates must not reach Codex generation")
+
+    monkeypatch.setattr("backend.trading.production_acceptance.PRODUCTION_ACCEPTANCE_SCAN_RETRY_SECONDS", 0)
+    monkeypatch.setattr(learning_data_audit, "summary", lambda force=False, limit=None: {"production_grade": True, "trust_level": "PRODUCTION", "reasons": []})
+    monkeypatch.setattr(radar_engine, "scan", fake_scan)
+    monkeypatch.setattr(radar_engine, "select_ai_candidates", lambda items: list(items))
+    monkeypatch.setattr(radar_engine, "select_ai_review_candidates", lambda items: [])
+    monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: (list(radar_engine.top50), "strict"))
+    monkeypatch.setattr(autotrader, "_geometry_supported_candidate_order", fake_geometry_order)
+    monkeypatch.setattr(production_acceptance_runner, "_generate_plan", fail_generate)
+
+    out = asyncio.run(production_acceptance_runner.run(mode="preflight", manage_seconds=0))
+    stages = {stage["name"]: stage for stage in out["stages"]}
+    evidence = stages["candidate_selection"]["evidence"]
+
+    assert out["result"]["blocked"] == "no_strict_production_candidates"
+    assert stages["candidate_selection"]["ok"] is False
+    assert evidence["candidate_symbols"] == []
+    assert evidence["geometry_rejected_symbols"] == [weak.symbol]
+    assert len(evidence["candidate_attempts"]) == 3
+    assert all(attempt["geometry_retry_reason"] == "no_geometry_supported_strict_candidate" for attempt in evidence["candidate_attempts"])
+    assert all(attempt["geometry_candidate_reports"][0]["geometry_status"] == "weak" for attempt in evidence["candidate_attempts"])
+
+
+def test_production_acceptance_rejects_strict_candidates_blocked_by_generation_gate(monkeypatch):
+    item = high_quality_item(symbol="GATEFILTERUSDT", side="SHORT", price=100)
+    ok_sample = ok_strategy_geometry_sample(item)
+
+    async def fake_scan(force_refresh=False):
+        radar_engine.top50 = [item]
+        radar_engine.last_scan_id = "scan_generation_gate_filter"
+        radar_engine.last_scan_time = "12:02:00"
+        return radar_engine.top50
+
+    async def fake_geometry_order(candidates, candidate_source, performance_context=None):
+        assert candidate_source == "strict"
+        autotrader._candidate_geometry_samples[item.symbol] = ok_sample
+        return [item], [
+            {
+                "symbol": item.symbol,
+                "geometry_status": "ok",
+                "sample_count": 120,
+                "win_rate": 0.64,
+                "expected_r": 0.42,
+                "profit_factor": 1.82,
+                "pass_count": 12,
+            }
+        ]
+
+    async def fail_generate(*args, **kwargs):
+        raise AssertionError("generation-gate blocked candidates must not reach Codex generation")
+
+    monkeypatch.setattr("backend.trading.production_acceptance.PRODUCTION_ACCEPTANCE_SCAN_RETRY_SECONDS", 0)
+    monkeypatch.setattr(learning_data_audit, "summary", lambda force=False, limit=None: {"production_grade": True, "trust_level": "PRODUCTION", "reasons": []})
+    monkeypatch.setattr(radar_engine, "scan", fake_scan)
+    monkeypatch.setattr(radar_engine, "select_ai_candidates", lambda items: [item])
+    monkeypatch.setattr(radar_engine, "select_ai_review_candidates", lambda items: [])
+    monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([item], "strict"))
+    monkeypatch.setattr(autotrader, "_geometry_supported_candidate_order", fake_geometry_order)
+    monkeypatch.setattr(production_acceptance_runner, "_generate_plan", fail_generate)
+    monkeypatch.setattr(
+        ai_strategy_feedback,
+        "evaluate_candidate",
+        lambda candidate: {
+            "generation_gate": {
+                "allow_open_plan": True,
+                "review_required": True,
+                "reasons": [],
+                "review_reasons": ["same_side"],
+            },
+            "candidate_learning_delta": {
+                "material_improvements_vs_losses": [],
+                "overlaps_with_losing_risks": [{"name": "event_win_rate_low", "count": 2}],
+            },
+        },
+    )
+
+    out = asyncio.run(production_acceptance_runner.run(mode="preflight", manage_seconds=0))
+    stages = {stage["name"]: stage for stage in out["stages"]}
+    evidence = stages["candidate_selection"]["evidence"]
+
+    assert out["result"]["blocked"] == "no_strict_production_candidates"
+    assert stages["candidate_selection"]["ok"] is False
+    assert evidence["candidate_symbols"] == []
+    assert evidence["generation_gate_rejected_symbols"] == [item.symbol]
+    assert evidence["candidate_attempts"][0]["generation_gate_rejected_symbols"] == [item.symbol]
+    assert evidence["candidate_attempts"][0]["generation_gate_rejections"][0]["reasons"] == ["review_required_without_material_improvement"]
 
 
 def test_production_acceptance_uses_strict_geometry_candidate_when_only_cyqnt_blocks(monkeypatch):
@@ -9575,6 +9699,47 @@ def test_production_acceptance_skips_codex_when_review_lacks_material_improvemen
     assert out["provider"] == "generation_gate"
     assert out["plan"].action == "WAIT"
     assert out["plan_attempts"][0]["provider"] == "generation_gate"
+    assert out["plan_attempts"][0]["validation_reason"] == "review_required_without_material_improvement"
+
+
+def test_production_acceptance_generation_gate_reads_top_level_feedback(monkeypatch):
+    item = high_quality_item(symbol="TOPLEVELREVIEWUSDT", side="SHORT", price=100)
+
+    async def fake_fresh_item(candidate):
+        return candidate
+
+    async def fail_generate(*args, **kwargs):
+        raise AssertionError("top-level review gate should block before Codex")
+
+    monkeypatch.setattr(production_acceptance_runner, "_fresh_item", fake_fresh_item)
+    monkeypatch.setattr(production_acceptance_runner, "_generate_plan", fail_generate)
+    patch_ok_production_strategy_geometry(monkeypatch)
+    monkeypatch.setattr(
+        autotrader,
+        "_ai_candidate_freshness_report",
+        lambda candidate, source, performance: (True, {"reasons": []}),
+    )
+    monkeypatch.setattr(
+        ai_strategy_feedback,
+        "evaluate_candidate",
+        lambda candidate: {
+            "generation_gate": {
+                "allow_open_plan": True,
+                "review_required": True,
+                "reasons": [],
+                "review_reasons": ["same_side", "feature_overlap_side"],
+            },
+            "candidate_learning_delta": {
+                "material_improvements_vs_losses": [],
+                "overlaps_with_losing_risks": [{"name": "event_profit_factor_low", "count": 3}],
+            },
+        },
+    )
+
+    out = asyncio.run(production_acceptance_runner._try_generate_open_plan([item], {}, "strict", []))
+
+    assert out["provider"] == "generation_gate"
+    assert out["plan"].action == "WAIT"
     assert out["plan_attempts"][0]["validation_reason"] == "review_required_without_material_improvement"
 
 

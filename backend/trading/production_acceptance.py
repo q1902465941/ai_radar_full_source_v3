@@ -220,6 +220,8 @@ class ProductionAcceptanceRunner:
         review_candidates = []
         geometry_candidate_reports: list[dict[str, Any]] = []
         candidate_geometry_samples: dict[str, dict[str, Any]] = {}
+        geometry_rejected_symbols: list[str] = []
+        generation_gate_rejections: list[dict[str, Any]] = []
         candidate_source = "strict"
         for attempt in range(1, PRODUCTION_ACCEPTANCE_SCAN_ATTEMPTS + 1):
             configured_candidates, configured_source = autotrader._candidate_batch(performance)
@@ -245,8 +247,27 @@ class ProductionAcceptanceRunner:
                 )
                 attempt_evidence["geometry_ranked_symbols"] = [item.symbol for item in candidates]
                 attempt_evidence["geometry_candidate_reports"] = geometry_candidate_reports
+                geometry_rejected_symbols = self._geometry_rejected_symbols(candidates, candidate_geometry_samples)
+                attempt_evidence["geometry_supported_symbols"] = [
+                    item.symbol for item in self._geometry_supported_candidates(candidates, candidate_geometry_samples)
+                ]
+                attempt_evidence["geometry_rejected_symbols"] = geometry_rejected_symbols
                 if self._has_strategy_geometry_supported_candidate(candidates, candidate_geometry_samples):
-                    break
+                    candidates = self._geometry_supported_candidates(candidates, candidate_geometry_samples)
+                    candidates, generation_gate_rejections = self._generation_gate_supported_candidates(
+                        candidates,
+                        candidate_source,
+                        candidate_geometry_samples,
+                    )
+                    attempt_evidence["generation_gate_rejected_symbols"] = [
+                        row["symbol"] for row in generation_gate_rejections
+                    ]
+                    attempt_evidence["generation_gate_rejections"] = generation_gate_rejections
+                    if not candidates:
+                        attempt_evidence["generation_gate_retry_reason"] = "no_generation_gate_supported_strict_candidate"
+                    else:
+                        break
+                candidates = []
                 attempt_evidence["geometry_retry_reason"] = "no_geometry_supported_strict_candidate"
                 if attempt >= PRODUCTION_ACCEPTANCE_SCAN_ATTEMPTS:
                     break
@@ -262,11 +283,26 @@ class ProductionAcceptanceRunner:
                 attempt_evidence["strict_geometry_ranked_symbols"] = [item.symbol for item in strict_geometry_ordered]
                 attempt_evidence["strict_geometry_candidate_reports"] = strict_geometry_reports
                 if self._has_strategy_geometry_supported_candidate(strict_geometry_ordered, strict_geometry_samples):
-                    candidates = strict_geometry_ordered
+                    candidates = self._geometry_supported_candidates(strict_geometry_ordered, strict_geometry_samples)
+                    candidates, generation_gate_rejections = self._generation_gate_supported_candidates(
+                        candidates,
+                        "strict_geometry",
+                        strict_geometry_samples,
+                    )
                     geometry_candidate_reports = strict_geometry_reports
                     candidate_geometry_samples = strict_geometry_samples
-                    candidate_source = "strict_geometry"
-                    break
+                    geometry_rejected_symbols = self._geometry_rejected_symbols(strict_geometry_ordered, strict_geometry_samples)
+                    attempt_evidence["strict_geometry_supported_symbols"] = [item.symbol for item in candidates]
+                    attempt_evidence["strict_geometry_rejected_symbols"] = geometry_rejected_symbols
+                    attempt_evidence["strict_geometry_generation_gate_rejected_symbols"] = [
+                        row["symbol"] for row in generation_gate_rejections
+                    ]
+                    attempt_evidence["strict_geometry_generation_gate_rejections"] = generation_gate_rejections
+                    if not candidates:
+                        attempt_evidence["strict_geometry_generation_gate_retry_reason"] = "no_generation_gate_supported_strict_geometry_candidate"
+                    else:
+                        candidate_source = "strict_geometry"
+                        break
                 attempt_evidence["strict_geometry_retry_reason"] = "no_geometry_supported_strict_geometry_candidate"
             if attempt < PRODUCTION_ACCEPTANCE_SCAN_ATTEMPTS:
                 await asyncio.sleep(PRODUCTION_ACCEPTANCE_SCAN_RETRY_SECONDS)
@@ -287,6 +323,9 @@ class ProductionAcceptanceRunner:
                     "candidate_source": candidate_source,
                     "candidate_symbols": [item.symbol for item in candidates],
                     "geometry_candidate_reports": geometry_candidate_reports,
+                    "geometry_rejected_symbols": geometry_rejected_symbols,
+                    "generation_gate_rejected_symbols": [row["symbol"] for row in generation_gate_rejections],
+                    "generation_gate_rejections": generation_gate_rejections,
                     "configured_candidate_source": configured_source,
                     "configured_candidate_symbols": [item.symbol for item in configured_candidates],
                     "production_requires_source": "strict",
@@ -362,8 +401,14 @@ class ProductionAcceptanceRunner:
                     fallback_candidates,
                     fallback_geometry_samples,
                 )
+                fallback_candidates = self._geometry_supported_candidates(fallback_candidates, fallback_geometry_samples)
+                fallback_candidates, fallback_generation_rejections = self._generation_gate_supported_candidates(
+                    fallback_candidates,
+                    "strict_geometry",
+                    fallback_geometry_samples,
+                )
                 fallback_chain = None
-                if fallback_supported:
+                if fallback_supported and fallback_candidates:
                     fallback_chain = await self._try_generate_and_risk_open(
                         fallback_candidates,
                         performance,
@@ -386,6 +431,8 @@ class ProductionAcceptanceRunner:
                             "candidate_symbols": [item.symbol for item in fallback_candidates],
                             "geometry_candidate_reports": fallback_geometry_reports,
                             "geometry_supported": fallback_supported,
+                            "generation_gate_rejected_symbols": [row["symbol"] for row in fallback_generation_rejections],
+                            "generation_gate_rejections": fallback_generation_rejections,
                             "provider": fallback_chain.get("provider") if isinstance(fallback_chain, dict) else "",
                             "action": fallback_plan.action if fallback_plan else "",
                             "symbol": fallback_plan.symbol if fallback_plan else "",
@@ -1097,7 +1144,7 @@ class ProductionAcceptanceRunner:
             feedback = ai_strategy_feedback.evaluate_candidate(item)
         except Exception:
             return {}
-        candidate_feedback = feedback.get("candidate_feedback") if isinstance(feedback, dict) else {}
+        candidate_feedback = self._candidate_feedback_payload(feedback)
         gate = candidate_feedback.get("generation_gate") if isinstance(candidate_feedback, dict) else {}
         if isinstance(gate, dict) and gate.get("allow_open_plan") is False:
             if self._strict_geometry_overrides_generation_gate(
@@ -1116,6 +1163,14 @@ class ProductionAcceptanceRunner:
                 "blocked_by": "production_acceptance_review_material_improvement_gate",
             }
         return {}
+
+    def _candidate_feedback_payload(self, feedback: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(feedback, dict):
+            return {}
+        nested = feedback.get("candidate_feedback")
+        if isinstance(nested, dict) and nested:
+            return nested
+        return feedback
 
     def _has_material_review_improvement(self, candidate_feedback: dict[str, Any]) -> bool:
         if not isinstance(candidate_feedback, dict):
@@ -1399,6 +1454,67 @@ class ProductionAcceptanceRunner:
             if isinstance(sample, dict) and sample and not self._strategy_geometry_reasons(sample):
                 return True
         return False
+
+    def _geometry_supported_candidates(
+        self,
+        candidates: list[RadarItem],
+        candidate_geometry_samples: dict[str, dict[str, Any]],
+    ) -> list[RadarItem]:
+        if not candidates or not isinstance(candidate_geometry_samples, dict):
+            return []
+        supported: list[RadarItem] = []
+        for item in candidates:
+            sample = candidate_geometry_samples.get(item.symbol)
+            if isinstance(sample, dict) and sample and not self._strategy_geometry_reasons(sample):
+                supported.append(item)
+        return supported
+
+    def _geometry_rejected_symbols(
+        self,
+        candidates: list[RadarItem],
+        candidate_geometry_samples: dict[str, dict[str, Any]],
+    ) -> list[str]:
+        if not candidates:
+            return []
+        rejected: list[str] = []
+        samples = candidate_geometry_samples if isinstance(candidate_geometry_samples, dict) else {}
+        for item in candidates:
+            sample = samples.get(item.symbol)
+            if not isinstance(sample, dict) or not sample or self._strategy_geometry_reasons(sample):
+                rejected.append(item.symbol)
+        return rejected
+
+    def _generation_gate_supported_candidates(
+        self,
+        candidates: list[RadarItem],
+        candidate_source: str,
+        candidate_geometry_samples: dict[str, dict[str, Any]],
+    ) -> tuple[list[RadarItem], list[dict[str, Any]]]:
+        if not candidates:
+            return [], []
+        supported: list[RadarItem] = []
+        rejections: list[dict[str, Any]] = []
+        samples = candidate_geometry_samples if isinstance(candidate_geometry_samples, dict) else {}
+        for item in candidates:
+            sample = samples.get(item.symbol)
+            gate = self._blocked_generation_gate(
+                item,
+                candidate_source=candidate_source,
+                strategy_geometry_sample=sample if isinstance(sample, dict) else None,
+            )
+            if gate:
+                rejections.append(
+                    {
+                        "symbol": item.symbol,
+                        "reasons": _gate_reasons(gate),
+                        "review_required": bool(gate.get("review_required")),
+                        "review_reasons": [str(reason) for reason in gate.get("review_reasons") or [] if str(reason)],
+                        "blocked_by": str(gate.get("blocked_by") or "generation_gate"),
+                    }
+                )
+            else:
+                supported.append(item)
+        return supported, rejections
 
     def _chain_has_open_strategy(self, chain: dict[str, Any]) -> bool:
         return bool(
