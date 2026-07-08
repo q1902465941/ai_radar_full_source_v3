@@ -250,6 +250,24 @@ class ProductionAcceptanceRunner:
                 attempt_evidence["geometry_retry_reason"] = "no_geometry_supported_strict_candidate"
                 if attempt >= PRODUCTION_ACCEPTANCE_SCAN_ATTEMPTS:
                     break
+            strict_geometry_candidates = self._strict_geometry_candidates(radar_engine.top50)
+            attempt_evidence["strict_geometry_count"] = len(strict_geometry_candidates)
+            attempt_evidence["strict_geometry_symbols"] = [item.symbol for item in strict_geometry_candidates[:5]]
+            if strict_geometry_candidates:
+                strict_geometry_ordered, strict_geometry_reports, strict_geometry_samples = await self._geometry_rank_candidates(
+                    strict_geometry_candidates,
+                    "strict_geometry",
+                    performance,
+                )
+                attempt_evidence["strict_geometry_ranked_symbols"] = [item.symbol for item in strict_geometry_ordered]
+                attempt_evidence["strict_geometry_candidate_reports"] = strict_geometry_reports
+                if self._has_strategy_geometry_supported_candidate(strict_geometry_ordered, strict_geometry_samples):
+                    candidates = strict_geometry_ordered
+                    geometry_candidate_reports = strict_geometry_reports
+                    candidate_geometry_samples = strict_geometry_samples
+                    candidate_source = "strict_geometry"
+                    break
+                attempt_evidence["strict_geometry_retry_reason"] = "no_geometry_supported_strict_geometry_candidate"
             if attempt < PRODUCTION_ACCEPTANCE_SCAN_ATTEMPTS:
                 await asyncio.sleep(PRODUCTION_ACCEPTANCE_SCAN_RETRY_SECONDS)
                 try:
@@ -542,6 +560,7 @@ class ProductionAcceptanceRunner:
                 "acceptance_mode": True,
                 "production_acceptance": True,
                 "strict_candidate": candidate_source == "strict",
+                "strict_geometry_candidate": candidate_source == "strict_geometry",
                 "attempts": candidate_attempts,
                 "instruction": (
                     "This item already passed the local strict candidate selector. "
@@ -562,6 +581,10 @@ class ProductionAcceptanceRunner:
         }
         if isinstance(strategy_geometry_sample, dict) and strategy_geometry_sample:
             position_context["strategy_geometry_sample"] = strategy_geometry_sample
+            if candidate_source == "strict_geometry":
+                feedback_override = self._strict_geometry_ai_feedback_override(item, strategy_geometry_sample)
+                if feedback_override:
+                    position_context["ai_strategy_quality_feedback"] = feedback_override
         return await ai_service.generate_strategy(item, position_context)
 
     async def _try_generate_open_plan(
@@ -614,7 +637,7 @@ class ProductionAcceptanceRunner:
                     selected_provider = "freshness_guard"
                     selected_plan_reason = ",".join(freshness["reasons"][:4])
                 continue
-            generation_gate = self._blocked_generation_gate(attempted_item)
+            generation_gate = self._blocked_generation_gate(attempted_item, candidate_source=candidate_source) if candidate_source != "strict_geometry" else {}
             if generation_gate:
                 attempted_plan = self._generation_gate_wait_plan(attempted_item, generation_gate)
                 gate_reasons = _gate_reasons(generation_gate)
@@ -657,6 +680,46 @@ class ProductionAcceptanceRunner:
                     selected_plan = attempted_plan
                     selected_provider = "strategy_geometry_gate"
                     selected_plan_reason = geometry_reasons[0]
+                continue
+            generation_gate = (
+                self._blocked_generation_gate(
+                    attempted_item,
+                    candidate_source=candidate_source,
+                    strategy_geometry_sample=geometry_sample,
+                )
+                if candidate_source == "strict_geometry"
+                else {}
+            )
+            if generation_gate:
+                attempted_plan = self._generation_gate_wait_plan(attempted_item, generation_gate)
+                gate_reasons = _gate_reasons(generation_gate)
+                plan_attempts.append(
+                    {
+                        "attempt": idx,
+                        "symbol": attempted_item.symbol,
+                        "side": attempted_item.direction,
+                        "rank": attempted_item.rank,
+                        "score": attempted_item.score,
+                        "fund_confirm": f"{attempted_item.fund_confirm_count}/{attempted_item.fund_confirm_total}",
+                        "fake_breakout_risk": attempted_item.fake_breakout_risk,
+                        "provider": "generation_gate",
+                        "action": attempted_plan.action,
+                        "confidence": attempted_plan.confidence,
+                        "reason": attempted_plan.reason,
+                        "wait_type": attempted_plan.wait_type,
+                        "validation_ok": False,
+                        "validation_reason": ",".join(gate_reasons[:4]),
+                        "opens": False,
+                        "generation_gate": generation_gate,
+                        "strategy_geometry_sample": geometry_sample,
+                        "plan": _plan_snapshot(attempted_plan),
+                    }
+                )
+                if selected_plan is None:
+                    selected_item = attempted_item
+                    selected_plan = attempted_plan
+                    selected_provider = "generation_gate"
+                    selected_plan_reason = ",".join(gate_reasons[:4])
                 continue
             attempted_plan = await self._generate_plan(
                 attempted_item,
@@ -771,7 +834,7 @@ class ProductionAcceptanceRunner:
                     selected_provider = "freshness_guard"
                     selected_plan_reason = ",".join(freshness["reasons"][:4])
                 continue
-            generation_gate = self._blocked_generation_gate(attempted_item)
+            generation_gate = self._blocked_generation_gate(attempted_item, candidate_source=candidate_source) if candidate_source != "strict_geometry" else {}
             if generation_gate:
                 attempted_plan = self._generation_gate_wait_plan(attempted_item, generation_gate)
                 gate_reasons = _gate_reasons(generation_gate)
@@ -814,6 +877,46 @@ class ProductionAcceptanceRunner:
                     selected_plan = attempted_plan
                     selected_provider = "strategy_geometry_gate"
                     selected_plan_reason = geometry_reasons[0]
+                continue
+            generation_gate = (
+                self._blocked_generation_gate(
+                    attempted_item,
+                    candidate_source=candidate_source,
+                    strategy_geometry_sample=geometry_sample,
+                )
+                if candidate_source == "strict_geometry"
+                else {}
+            )
+            if generation_gate:
+                attempted_plan = self._generation_gate_wait_plan(attempted_item, generation_gate)
+                gate_reasons = _gate_reasons(generation_gate)
+                plan_attempts.append(
+                    {
+                        "attempt": idx,
+                        "symbol": attempted_item.symbol,
+                        "side": attempted_item.direction,
+                        "rank": attempted_item.rank,
+                        "score": attempted_item.score,
+                        "fund_confirm": f"{attempted_item.fund_confirm_count}/{attempted_item.fund_confirm_total}",
+                        "fake_breakout_risk": attempted_item.fake_breakout_risk,
+                        "provider": "generation_gate",
+                        "action": attempted_plan.action,
+                        "confidence": attempted_plan.confidence,
+                        "reason": attempted_plan.reason,
+                        "wait_type": attempted_plan.wait_type,
+                        "validation_ok": False,
+                        "validation_reason": ",".join(gate_reasons[:4]),
+                        "opens": False,
+                        "generation_gate": generation_gate,
+                        "strategy_geometry_sample": geometry_sample,
+                        "plan": _plan_snapshot(attempted_plan),
+                    }
+                )
+                if selected_plan is None:
+                    selected_item = attempted_item
+                    selected_plan = attempted_plan
+                    selected_provider = "generation_gate"
+                    selected_plan_reason = ",".join(gate_reasons[:4])
                 continue
             attempted_plan = await self._generate_plan(
                 attempted_item,
@@ -925,7 +1028,13 @@ class ProductionAcceptanceRunner:
             raw={"provider": "freshness_guard", "freshness": freshness},
         )
 
-    def _blocked_generation_gate(self, item: RadarItem) -> dict[str, Any]:
+    def _blocked_generation_gate(
+        self,
+        item: RadarItem,
+        *,
+        candidate_source: str = "",
+        strategy_geometry_sample: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         try:
             feedback = ai_strategy_feedback.evaluate_candidate(item)
         except Exception:
@@ -933,8 +1042,65 @@ class ProductionAcceptanceRunner:
         candidate_feedback = feedback.get("candidate_feedback") if isinstance(feedback, dict) else {}
         gate = candidate_feedback.get("generation_gate") if isinstance(candidate_feedback, dict) else {}
         if isinstance(gate, dict) and gate.get("allow_open_plan") is False:
+            if self._strict_geometry_overrides_generation_gate(
+                candidate_source=candidate_source,
+                gate=gate,
+                strategy_geometry_sample=strategy_geometry_sample,
+            ):
+                return {}
             return gate
         return {}
+
+    def _strict_geometry_overrides_generation_gate(
+        self,
+        *,
+        candidate_source: str,
+        gate: dict[str, Any],
+        strategy_geometry_sample: dict[str, Any] | None,
+    ) -> bool:
+        if str(candidate_source or "") != "strict_geometry":
+            return False
+        if not isinstance(gate, dict):
+            return False
+        if set(_gate_reasons(gate)) != {"cyqnt_estimated_win_rate_low"}:
+            return False
+        if not isinstance(strategy_geometry_sample, dict) or not strategy_geometry_sample:
+            return False
+        return not self._strategy_geometry_reasons(strategy_geometry_sample)
+
+    def _strict_geometry_ai_feedback_override(self, item: RadarItem, strategy_geometry_sample: dict[str, Any]) -> dict[str, Any]:
+        try:
+            feedback = copy.deepcopy(ai_strategy_feedback.compact_context(item))
+        except Exception:
+            return {}
+        candidate_feedback = feedback.get("candidate_feedback") if isinstance(feedback.get("candidate_feedback"), dict) else {}
+        gate = candidate_feedback.get("generation_gate") if isinstance(candidate_feedback.get("generation_gate"), dict) else {}
+        if not self._strict_geometry_overrides_generation_gate(
+            candidate_source="strict_geometry",
+            gate=gate,
+            strategy_geometry_sample=strategy_geometry_sample,
+        ):
+            return {}
+        candidate_feedback["generation_gate"] = {
+            **gate,
+            "allow_open_plan": True,
+            "review_required": False,
+            "reasons": [],
+            "override_reason": "strict_geometry_supported",
+            "overridden_generation_gate": gate,
+            "instruction": (
+                "Strict production selection was blocked only by cyqnt_estimated_win_rate_low, "
+                "but first-touch strategy geometry passed all local production gates. Codex may generate "
+                "an OPEN plan only if it uses the selected geometry and states the historical weakness in risk controls."
+            ),
+        }
+        feedback["candidate_feedback"] = candidate_feedback
+        feedback["strict_geometry_override"] = {
+            "enabled": True,
+            "reason": "strict_geometry_supported",
+            "strategy_geometry_sample": strategy_geometry_sample,
+        }
+        return feedback
 
     def _generation_gate_wait_plan(self, item: RadarItem, gate: dict[str, Any]) -> StrategyPlan:
         reasons = _gate_reasons(gate)
@@ -990,6 +1156,25 @@ class ProductionAcceptanceRunner:
                 if isinstance(sample, dict) and sample:
                     samples[symbol] = sample
         return ordered, reports if isinstance(reports, list) else [], samples
+
+    def _strict_geometry_candidates(self, items: list[RadarItem]) -> list[RadarItem]:
+        scored: list[tuple[tuple, RadarItem]] = []
+        for item in items:
+            try:
+                ok, feature, reasons = radar_engine._production_candidate_check(item)
+            except Exception:
+                continue
+            if ok:
+                continue
+            if set(reasons or []) != {"cyqnt_win_rate_low"}:
+                continue
+            if float(getattr(feature, "feature_score", 0.0) or 0.0) < 68.0:
+                continue
+            if float(getattr(feature, "selection_score", 0.0) or 0.0) < 68.0:
+                continue
+            scored.append((radar_engine._production_candidate_rank(item, feature), item))
+        scored.sort(key=lambda row: row[0], reverse=True)
+        return [item for _, item in scored]
 
     async def _strategy_geometry_sample(
         self,

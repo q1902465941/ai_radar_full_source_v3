@@ -1266,7 +1266,7 @@ class AutoTrader:
 
     def _uses_strategy_geometry_candidate_order(self, candidate_source: str) -> bool:
         source = str(candidate_source or "")
-        return source in {"paper_top", "strict", "strict_review"} or self._is_paper_probe_source(source)
+        return source in {"paper_top", "strict", "strict_review", "strict_geometry"} or self._is_paper_probe_source(source)
 
     def _geometry_candidate_pool(self, candidates: list, candidate_source: str, performance_context: dict | None = None) -> list:
         source = str(candidate_source or "")
