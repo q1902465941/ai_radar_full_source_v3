@@ -930,6 +930,12 @@ class AIStrategyFeedback:
             for sample in side_losses
             for pos in _string_set(sample.get("positive_features") or [])
         )
+        resolved_risks = [
+            {"name": key, "count": loss_risks[key]}
+            for key in sorted(set(loss_risks).difference(current_risk), key=lambda k: (-loss_risks[k], k))[:6]
+        ]
+        novel_positives = [key for key in sorted(current_pos) if key not in loss_positives]
+        resolved_improvements = [f"risk_resolved:{row['name']}" for row in resolved_risks]
         return {
             "current_positive_factors": sorted(current_pos)[:8],
             "current_failure_risks": sorted(current_risk)[:8],
@@ -937,12 +943,12 @@ class AIStrategyFeedback:
                 {"name": key, "count": loss_risks[key]}
                 for key in sorted(current_risk.intersection(loss_risks), key=lambda k: loss_risks[k], reverse=True)[:6]
             ],
-            "material_improvements_vs_losses": [
-                key for key in sorted(current_pos) if key not in loss_positives
-            ][:6],
+            "resolved_losing_risks": resolved_risks,
+            "material_improvements_vs_losses": [*novel_positives, *resolved_improvements][:6],
             "instruction": (
-                "If material_improvements_vs_losses is non-empty and hard avoid_repeating is empty, Codex may create a "
-                "paper-only validation OPEN when risk geometry and costs are valid. If overlaps_with_losing_risks dominate, WAIT."
+                "If material_improvements_vs_losses is non-empty, overlaps_with_losing_risks is empty, and hard avoid_repeating "
+                "is empty, Codex may create a paper-only validation OPEN when risk geometry and costs are valid. "
+                "If overlaps_with_losing_risks is non-empty, WAIT until those losing risks are resolved."
             ),
         }
 

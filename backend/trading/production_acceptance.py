@@ -1156,11 +1156,33 @@ class ProductionAcceptanceRunner:
             return gate
         if isinstance(gate, dict) and gate.get("review_required") and not self._has_material_review_improvement(candidate_feedback):
             reasons = list(dict.fromkeys([*_gate_reasons(gate), "review_required_without_material_improvement"]))
+            delta = candidate_feedback.get("candidate_learning_delta")
             return {
                 **gate,
                 "allow_open_plan": False,
                 "reasons": reasons,
                 "blocked_by": "production_acceptance_review_material_improvement_gate",
+                "candidate_learning_delta": delta if isinstance(delta, dict) else {},
+            }
+        if isinstance(gate, dict) and gate.get("review_required") and self._has_losing_risk_overlap(candidate_feedback):
+            reasons = list(dict.fromkeys([*_gate_reasons(gate), "review_required_losing_risk_overlap"]))
+            delta = candidate_feedback.get("candidate_learning_delta")
+            return {
+                **gate,
+                "allow_open_plan": False,
+                "reasons": reasons,
+                "blocked_by": "production_acceptance_review_losing_risk_overlap_gate",
+                "candidate_learning_delta": delta if isinstance(delta, dict) else {},
+            }
+        if isinstance(gate, dict) and self._has_losing_risk_overlap(candidate_feedback):
+            reasons = list(dict.fromkeys([*_gate_reasons(gate), "candidate_losing_risk_overlap"]))
+            delta = candidate_feedback.get("candidate_learning_delta")
+            return {
+                **gate,
+                "allow_open_plan": False,
+                "reasons": reasons,
+                "blocked_by": "production_acceptance_losing_risk_overlap_gate",
+                "candidate_learning_delta": delta if isinstance(delta, dict) else {},
             }
         return {}
 
@@ -1180,6 +1202,22 @@ class ProductionAcceptanceRunner:
             return False
         improvements = delta.get("material_improvements_vs_losses")
         return bool(isinstance(improvements, list) and [item for item in improvements if str(item or "").strip()])
+
+    def _has_losing_risk_overlap(self, candidate_feedback: dict[str, Any]) -> bool:
+        if not isinstance(candidate_feedback, dict):
+            return False
+        delta = candidate_feedback.get("candidate_learning_delta")
+        if not isinstance(delta, dict):
+            return False
+        overlaps = delta.get("overlaps_with_losing_risks")
+        if not isinstance(overlaps, list):
+            return False
+        for row in overlaps:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("name") or "").strip() and _safe_int(row.get("count")) > 0:
+                return True
+        return False
 
     def _strict_geometry_overrides_generation_gate(
         self,
@@ -1360,13 +1398,19 @@ class ProductionAcceptanceRunner:
             return False
         if not isinstance(feedback, dict):
             return False
-        if feedback.get("avoid_repeating"):
+        candidate_feedback = self._candidate_feedback_payload(feedback)
+        if candidate_feedback.get("avoid_repeating"):
             return False
-        review_lessons = feedback.get("review_lessons") if isinstance(feedback.get("review_lessons"), list) else []
+        if self._has_losing_risk_overlap(candidate_feedback):
+            return False
+        review_lessons = (
+            candidate_feedback.get("review_lessons")
+            if isinstance(candidate_feedback.get("review_lessons"), list)
+            else []
+        )
         if not review_lessons:
             return True
-        delta = feedback.get("candidate_learning_delta") if isinstance(feedback.get("candidate_learning_delta"), dict) else {}
-        return bool(delta.get("material_improvements_vs_losses"))
+        return self._has_material_review_improvement(candidate_feedback)
 
     async def _strategy_geometry_sample(
         self,
@@ -1503,15 +1547,17 @@ class ProductionAcceptanceRunner:
                 strategy_geometry_sample=sample if isinstance(sample, dict) else None,
             )
             if gate:
-                rejections.append(
-                    {
-                        "symbol": item.symbol,
-                        "reasons": _gate_reasons(gate),
-                        "review_required": bool(gate.get("review_required")),
-                        "review_reasons": [str(reason) for reason in gate.get("review_reasons") or [] if str(reason)],
-                        "blocked_by": str(gate.get("blocked_by") or "generation_gate"),
-                    }
-                )
+                rejection = {
+                    "symbol": item.symbol,
+                    "reasons": _gate_reasons(gate),
+                    "review_required": bool(gate.get("review_required")),
+                    "review_reasons": [str(reason) for reason in gate.get("review_reasons") or [] if str(reason)],
+                    "blocked_by": str(gate.get("blocked_by") or "generation_gate"),
+                }
+                delta = gate.get("candidate_learning_delta")
+                if isinstance(delta, dict) and delta:
+                    rejection["candidate_learning_delta"] = delta
+                rejections.append(rejection)
             else:
                 supported.append(item)
         return supported, rejections

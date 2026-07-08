@@ -5750,6 +5750,31 @@ def test_ai_strategy_feedback_releases_hard_avoid_after_recent_bucket_recovers()
     assert report["recent_recovered"] is True
 
 
+def test_ai_strategy_feedback_counts_resolved_losing_risks_as_material_improvement():
+    feature = {
+        "positive_factors": ["trend_positive", "fund_confirm_full"],
+        "failure_risks": [],
+    }
+    samples = [
+        {
+            "side": "LONG",
+            "pnl": -1.0,
+            "positive_features": ["trend_positive", "fund_confirm_full"],
+            "failure_risks": ["event_win_rate_low", "wick_above_paper_noise_budget"],
+        }
+    ]
+
+    delta = ai_strategy_feedback._candidate_learning_delta(feature, samples, "LONG")
+
+    assert delta["overlaps_with_losing_risks"] == []
+    assert delta["resolved_losing_risks"] == [
+        {"name": "event_win_rate_low", "count": 1},
+        {"name": "wick_above_paper_noise_budget", "count": 1},
+    ]
+    assert "risk_resolved:event_win_rate_low" in delta["material_improvements_vs_losses"]
+    assert "risk_resolved:wick_above_paper_noise_budget" in delta["material_improvements_vs_losses"]
+
+
 def test_auto_trading_risk_model_rejects_cost_inefficient_small_position(monkeypatch):
     monkeypatch.setattr(settings, "require_codex_strategy_for_entry", False)
     monkeypatch.setattr(performance_guard, "_closed_rows", lambda: [])
@@ -8842,6 +8867,9 @@ def test_production_acceptance_rejects_strict_candidates_blocked_by_generation_g
     assert evidence["generation_gate_rejected_symbols"] == [item.symbol]
     assert evidence["candidate_attempts"][0]["generation_gate_rejected_symbols"] == [item.symbol]
     assert evidence["candidate_attempts"][0]["generation_gate_rejections"][0]["reasons"] == ["review_required_without_material_improvement"]
+    assert evidence["candidate_attempts"][0]["generation_gate_rejections"][0]["candidate_learning_delta"]["overlaps_with_losing_risks"] == [
+        {"name": "event_win_rate_low", "count": 2}
+    ]
 
 
 def test_production_acceptance_uses_strict_geometry_candidate_when_only_cyqnt_blocks(monkeypatch):
@@ -8972,6 +9000,42 @@ def test_strict_geometry_candidates_require_review_material_improvements(monkeyp
     candidates = production_acceptance_runner._strict_geometry_candidates([reviewed, clean])
 
     assert [candidate.symbol for candidate in candidates] == [clean.symbol]
+
+
+def test_strict_geometry_candidates_reject_review_losing_risk_overlap(monkeypatch):
+    overlap = high_quality_item(symbol="REVIEWOVERLAPGEOMETRYUSDT", side="SHORT", price=100)
+    resolved = high_quality_item(symbol="REVIEWRESOLVEDGEOMETRYUSDT", side="SHORT", price=100)
+    feature = SimpleNamespace(
+        feature_score=100.0,
+        estimated_win_rate=0.41,
+        selection_score=82.0,
+        reasons=["historical_negative_estimate_capped"],
+    )
+
+    monkeypatch.setattr(radar_engine, "_production_candidate_check", lambda candidate: (False, feature, ["cyqnt_win_rate_low"]))
+
+    def fake_feedback(candidate):
+        delta = {
+            "material_improvements_vs_losses": ["risk_resolved:wick_above_paper_noise_budget"],
+            "overlaps_with_losing_risks": [],
+        }
+        if candidate.symbol == overlap.symbol:
+            delta = {
+                "material_improvements_vs_losses": ["risk_resolved:funding_negative"],
+                "overlaps_with_losing_risks": [{"name": "event_win_rate_low", "count": 2}],
+            }
+        return {
+            "quality_bias": "REVIEW",
+            "avoid_repeating": [],
+            "review_lessons": [{"name": "same_side"}],
+            "candidate_learning_delta": delta,
+        }
+
+    monkeypatch.setattr(ai_strategy_feedback, "evaluate_candidate", fake_feedback)
+
+    candidates = production_acceptance_runner._strict_geometry_candidates([overlap, resolved])
+
+    assert [candidate.symbol for candidate in candidates] == [resolved.symbol]
 
 
 def test_strict_geometry_candidates_require_current_microstructure_support(monkeypatch):
@@ -9741,6 +9805,89 @@ def test_production_acceptance_generation_gate_reads_top_level_feedback(monkeypa
     assert out["provider"] == "generation_gate"
     assert out["plan"].action == "WAIT"
     assert out["plan_attempts"][0]["validation_reason"] == "review_required_without_material_improvement"
+
+
+def test_production_acceptance_generation_gate_blocks_review_when_losing_risk_still_overlaps(monkeypatch):
+    item = high_quality_item(symbol="OVERLAPRISKUSDT", side="LONG", price=100)
+
+    async def fake_fresh_item(candidate):
+        return candidate
+
+    async def fail_generate(*args, **kwargs):
+        raise AssertionError("overlapping losing risks should block before Codex")
+
+    monkeypatch.setattr(production_acceptance_runner, "_fresh_item", fake_fresh_item)
+    monkeypatch.setattr(production_acceptance_runner, "_generate_plan", fail_generate)
+    patch_ok_production_strategy_geometry(monkeypatch)
+    monkeypatch.setattr(
+        autotrader,
+        "_ai_candidate_freshness_report",
+        lambda candidate, source, performance: (True, {"reasons": []}),
+    )
+    monkeypatch.setattr(
+        ai_strategy_feedback,
+        "evaluate_candidate",
+        lambda candidate: {
+            "generation_gate": {
+                "allow_open_plan": True,
+                "review_required": True,
+                "reasons": [],
+                "review_reasons": ["feature_overlap_side"],
+            },
+            "candidate_learning_delta": {
+                "material_improvements_vs_losses": ["risk_resolved:wick_above_paper_noise_budget"],
+                "overlaps_with_losing_risks": [{"name": "event_win_rate_low", "count": 2}],
+            },
+        },
+    )
+
+    out = asyncio.run(production_acceptance_runner._try_generate_open_plan([item], {}, "strict", []))
+
+    assert out["provider"] == "generation_gate"
+    assert out["plan_attempts"][0]["validation_reason"] == "review_required_losing_risk_overlap"
+    assert out["plan_attempts"][0]["generation_gate"]["candidate_learning_delta"]["overlaps_with_losing_risks"] == [
+        {"name": "event_win_rate_low", "count": 2}
+    ]
+
+
+def test_production_acceptance_generation_gate_blocks_non_review_losing_risk_overlap(monkeypatch):
+    item = high_quality_item(symbol="NONREVIEWOVERLAPRISKUSDT", side="LONG", price=100)
+
+    async def fake_fresh_item(candidate):
+        return candidate
+
+    async def fail_generate(*args, **kwargs):
+        raise AssertionError("losing-risk overlaps should block before Codex even without review_required")
+
+    monkeypatch.setattr(production_acceptance_runner, "_fresh_item", fake_fresh_item)
+    monkeypatch.setattr(production_acceptance_runner, "_generate_plan", fail_generate)
+    patch_ok_production_strategy_geometry(monkeypatch)
+    monkeypatch.setattr(
+        autotrader,
+        "_ai_candidate_freshness_report",
+        lambda candidate, source, performance: (True, {"reasons": []}),
+    )
+    monkeypatch.setattr(
+        ai_strategy_feedback,
+        "evaluate_candidate",
+        lambda candidate: {
+            "generation_gate": {
+                "allow_open_plan": True,
+                "review_required": False,
+                "reasons": [],
+            },
+            "candidate_learning_delta": {
+                "material_improvements_vs_losses": [],
+                "overlaps_with_losing_risks": [{"name": "event_profit_factor_low", "count": 2}],
+            },
+        },
+    )
+
+    out = asyncio.run(production_acceptance_runner._try_generate_open_plan([item], {}, "strict", []))
+
+    assert out["provider"] == "generation_gate"
+    assert out["plan_attempts"][0]["validation_reason"] == "candidate_losing_risk_overlap"
+    assert out["plan_attempts"][0]["generation_gate"]["blocked_by"] == "production_acceptance_losing_risk_overlap_gate"
 
 
 def test_production_acceptance_skips_codex_when_strategy_geometry_is_weak(monkeypatch):
