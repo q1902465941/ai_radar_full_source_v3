@@ -169,6 +169,27 @@ def test_docker_stack_verification_script_checks_monitor_and_mainnet_market_data
     assert "database path uses mounted Docker volume" in script
 
 
+def test_docker_stack_json_reader_retries_flaky_http_requests():
+    script = (ROOT / "scripts" / "verify_docker_stack.ps1").read_text(encoding="utf-8")
+    read_json = script[
+        script.index("function Read-Json") : script.index("function Read-HttpTextWithRetry")
+    ]
+
+    assert "Read-HttpTextWithRetry" in read_json
+    assert "ConvertFrom-Json" in read_json
+
+
+def test_docker_stack_waits_for_mainnet_monitor_prices_after_restart():
+    script = (ROOT / "scripts" / "verify_docker_stack.ps1").read_text(encoding="utf-8")
+    monitor_state_step = script[
+        script.index('Invoke-Step "monitor state uses mainnet market data"') : script.index('if (-not $SkipExternalBinanceCheck)')
+    ]
+
+    assert "for (" in monitor_state_step
+    assert "Start-Sleep -Seconds 1" in monitor_state_step
+    assert "BTCUSDT monitor price is not positive" in monitor_state_step
+
+
 def test_codex_strategy_generation_verification_script_runs_real_docker_codex_path():
     script = (ROOT / "scripts" / "verify_codex_strategy_generation.ps1").read_text(encoding="utf-8")
     module = (ROOT / "backend" / "ai_strategy" / "codex_generation_acceptance.py").read_text(encoding="utf-8")

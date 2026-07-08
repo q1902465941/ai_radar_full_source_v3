@@ -54,14 +54,12 @@ class ActiveCoinRegistry:
         score_by_symbol: dict[str, float] | None = None,
     ) -> list[ActiveCoin]:
         current = _now(now)
-        self.expire_idle(now=current)
+        candidate_symbols = [symbol for raw in symbols if (symbol := _symbol(raw))]
+        self.expire_idle(now=current, preserve_symbols=set(candidate_symbols))
         reason_by_symbol = reason_by_symbol or {}
         score_by_symbol = score_by_symbol or {}
         updated: list[ActiveCoin] = []
-        for raw in symbols:
-            symbol = _symbol(raw)
-            if not symbol:
-                continue
+        for symbol in candidate_symbols:
             if self._cooldowns.get(symbol, 0.0) > current and symbol not in self._active:
                 continue
             coin = self._active.get(symbol)
@@ -113,10 +111,18 @@ class ActiveCoinRegistry:
         self._recent_removed = self._recent_removed[:20]
         return True
 
-    def expire_idle(self, *, now: float | None = None) -> list[ActiveCoin]:
+    def expire_idle(
+        self,
+        *,
+        now: float | None = None,
+        preserve_symbols: set[str] | None = None,
+    ) -> list[ActiveCoin]:
         current = _now(now)
+        preserved = preserve_symbols or set()
         expired: list[ActiveCoin] = []
         for symbol, coin in list(self._active.items()):
+            if symbol in preserved:
+                continue
             if current - float(coin.last_seen or 0.0) <= self.idle_seconds:
                 continue
             expired.append(self.remove(symbol, now=current, reason="idle_timeout"))

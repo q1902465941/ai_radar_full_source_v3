@@ -346,6 +346,64 @@ class ProductionAcceptanceRunner:
             open_positions,
             candidate_geometry_samples=candidate_geometry_samples,
         )
+        if candidate_source == "strict" and not self._chain_has_open_strategy(chain):
+            fallback_candidates = [
+                item
+                for item in self._strict_geometry_candidates(radar_engine.top50)
+                if item.symbol not in {candidate.symbol for candidate in candidates}
+            ]
+            if fallback_candidates:
+                fallback_candidates, fallback_geometry_reports, fallback_geometry_samples = await self._geometry_rank_candidates(
+                    fallback_candidates,
+                    "strict_geometry",
+                    performance,
+                )
+                fallback_supported = self._has_strategy_geometry_supported_candidate(
+                    fallback_candidates,
+                    fallback_geometry_samples,
+                )
+                fallback_chain = None
+                if fallback_supported:
+                    fallback_chain = await self._try_generate_and_risk_open(
+                        fallback_candidates,
+                        performance,
+                        "strict_geometry",
+                        candidate_attempts,
+                        open_positions,
+                        candidate_geometry_samples=fallback_geometry_samples,
+                    )
+                    fallback_ok = self._chain_has_open_strategy(fallback_chain)
+                else:
+                    fallback_ok = False
+                fallback_plan = fallback_chain.get("plan") if isinstance(fallback_chain, dict) else None
+                stages.append(
+                    self._stage(
+                        "strict_geometry_fallback",
+                        fallback_ok,
+                        {
+                            "fallback_from": "strict",
+                            "candidate_source": "strict_geometry",
+                            "candidate_symbols": [item.symbol for item in fallback_candidates],
+                            "geometry_candidate_reports": fallback_geometry_reports,
+                            "geometry_supported": fallback_supported,
+                            "provider": fallback_chain.get("provider") if isinstance(fallback_chain, dict) else "",
+                            "action": fallback_plan.action if fallback_plan else "",
+                            "symbol": fallback_plan.symbol if fallback_plan else "",
+                            "side": fallback_plan.side if fallback_plan else "",
+                            "validation_ok": fallback_chain.get("plan_ok") if isinstance(fallback_chain, dict) else False,
+                            "validation_reason": fallback_chain.get("plan_reason") if isinstance(fallback_chain, dict) else "",
+                            "attempted_candidates": fallback_chain.get("attempted_candidates") if isinstance(fallback_chain, dict) else 0,
+                            "plan_attempts": fallback_chain.get("plan_attempts") if isinstance(fallback_chain, dict) else [],
+                            "risk_ok": fallback_chain.get("risk_ok") if isinstance(fallback_chain, dict) else False,
+                            "risk_attempts": fallback_chain.get("risk_attempts") if isinstance(fallback_chain, dict) else [],
+                        },
+                    )
+                )
+                if fallback_ok and fallback_chain is not None:
+                    chain = fallback_chain
+                    candidates = fallback_candidates
+                    candidate_source = "strict_geometry"
+                    candidate_geometry_samples = fallback_geometry_samples
         item = chain["item"]
         plan = chain["plan"]
         provider = chain["provider"]
@@ -1049,7 +1107,24 @@ class ProductionAcceptanceRunner:
             ):
                 return {}
             return gate
+        if isinstance(gate, dict) and gate.get("review_required") and not self._has_material_review_improvement(candidate_feedback):
+            reasons = list(dict.fromkeys([*_gate_reasons(gate), "review_required_without_material_improvement"]))
+            return {
+                **gate,
+                "allow_open_plan": False,
+                "reasons": reasons,
+                "blocked_by": "production_acceptance_review_material_improvement_gate",
+            }
         return {}
+
+    def _has_material_review_improvement(self, candidate_feedback: dict[str, Any]) -> bool:
+        if not isinstance(candidate_feedback, dict):
+            return False
+        delta = candidate_feedback.get("candidate_learning_delta")
+        if not isinstance(delta, dict):
+            return False
+        improvements = delta.get("material_improvements_vs_losses")
+        return bool(isinstance(improvements, list) and [item for item in improvements if str(item or "").strip()])
 
     def _strict_geometry_overrides_generation_gate(
         self,
@@ -1246,7 +1321,7 @@ class ProductionAcceptanceRunner:
         cached = {}
         if isinstance(candidate_geometry_samples, dict):
             cached = candidate_geometry_samples.get(item.symbol) or {}
-        if isinstance(cached, dict) and cached:
+        if isinstance(cached, dict) and cached and self._strategy_geometry_cache_current(item, cached):
             return cached
         try:
             sample = await strategy_geometry_sampler.evaluate(item)
@@ -1269,6 +1344,31 @@ class ProductionAcceptanceRunner:
             "side": item.direction,
             "samples": {"sample_count": 0, "pass_gate": False},
         }
+
+    def _strategy_geometry_cache_current(self, item: RadarItem, sample: dict[str, Any]) -> bool:
+        if not isinstance(sample, dict) or not sample:
+            return False
+        sample_symbol = str(sample.get("symbol") or "")
+        if sample_symbol and sample_symbol != item.symbol:
+            return False
+        selected = sample.get("selected_geometry") if isinstance(sample.get("selected_geometry"), dict) else {}
+        sample_side = str(selected.get("side") or sample.get("side") or "")
+        if sample_side and sample_side != str(item.direction or ""):
+            return False
+        current_price = _safe_float(getattr(item, "price", 0.0))
+        if current_price <= 0:
+            return True
+        zone_low = _safe_float(selected.get("entry_zone_low"))
+        zone_high = _safe_float(selected.get("entry_zone_high"))
+        entry = _safe_float(selected.get("entry"))
+        if (zone_low <= 0 or zone_high <= 0) and entry > 0:
+            zone_low = entry * 0.999
+            zone_high = entry * 1.001
+        if zone_low <= 0 or zone_high <= 0:
+            return True
+        low, high = sorted((zone_low, zone_high))
+        pad = current_price * 0.0005
+        return (low - pad) <= current_price <= (high + pad)
 
     def _strategy_geometry_reasons(self, sample: dict[str, Any]) -> list[str]:
         samples = sample.get("samples") if isinstance(sample.get("samples"), dict) else {}
@@ -1299,6 +1399,14 @@ class ProductionAcceptanceRunner:
             if isinstance(sample, dict) and sample and not self._strategy_geometry_reasons(sample):
                 return True
         return False
+
+    def _chain_has_open_strategy(self, chain: dict[str, Any]) -> bool:
+        return bool(
+            isinstance(chain, dict)
+            and chain.get("plan_ok")
+            and chain.get("ai_generated")
+            and chain.get("opens")
+        )
 
     def _strategy_geometry_wait_plan(self, item: RadarItem, sample: dict[str, Any], reasons: list[str]) -> StrategyPlan:
         reason = "strategy_geometry_gate_blocked"

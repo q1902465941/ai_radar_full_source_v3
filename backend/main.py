@@ -267,6 +267,70 @@ def _ticker_last_price(row: dict[str, Any]) -> float:
     return _optional_float(row.get("lastPrice")) or 0.0
 
 
+def _radar_items_with_live_prices(items: list[Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    symbols: list[str] = []
+    for item in items:
+        row = item.asdict() if hasattr(item, "asdict") else dict(item)
+        rows.append(row)
+        symbol = str(row.get("symbol") or "").upper()
+        if symbol:
+            symbols.append(symbol)
+
+    ws_ticker_rows = _ws_ticker_rows_by_symbol(symbols)
+    try:
+        scan_ticker_rows = binance_factor_source.ticker_rows_by_symbol(symbols)
+        scan_ticker_age = float(binance_factor_source.ticker_rows_age_seconds())
+    except Exception:
+        scan_ticker_rows = {}
+        scan_ticker_age = 999999.0
+    scan_ticker_source = str(binance_factor_source.last_refresh_source or "scan_ticker") or "scan_ticker"
+
+    for row in rows:
+        symbol = str(row.get("symbol") or "").upper()
+        snapshot_price = _optional_float(row.get("price")) or 0.0
+        row["snapshot_price"] = snapshot_price
+        ws_ticker_row = ws_ticker_rows.get(symbol) or {}
+        scan_ticker_row = scan_ticker_rows.get(symbol) or {}
+        ticker_row = ws_ticker_row or scan_ticker_row
+        ticker_source = "ws_ticker" if ws_ticker_row else scan_ticker_source
+        ticker_price = _ticker_last_price(ticker_row)
+        if ticker_price > 0:
+            source = f"{ticker_source}_last_price"
+            row["price"] = ticker_price
+            row["source"] = source
+            row["price_source"] = source
+            row["price_age_seconds"] = 0.0 if ws_ticker_row else scan_ticker_age
+            row["price_stale"] = False
+            row["price_error"] = ""
+            change_24h = _optional_float(ticker_row.get("priceChangePercent"))
+            quote_volume_24h = _optional_float(ticker_row.get("quoteVolume"))
+            if change_24h is not None:
+                row["change_24h"] = change_24h
+            if quote_volume_24h is not None:
+                row["quote_volume_24h"] = quote_volume_24h
+            continue
+
+        cached_quote = market_service.cached_price_quote(symbol)
+        cached_price = float(getattr(cached_quote, "price", 0.0) or 0.0)
+        if cached_price > 0:
+            row["price"] = cached_price
+            row["source"] = getattr(cached_quote, "source", "snapshot_cache")
+            row["price_source"] = row["source"]
+            row["price_age_seconds"] = float(getattr(cached_quote, "age_seconds", 999999.0) or 999999.0)
+            row["price_stale"] = bool(getattr(cached_quote, "stale", True))
+            row["price_error"] = str(getattr(cached_quote, "error", "") or "")
+            row["price_bid"] = float(getattr(cached_quote, "bid", 0.0) or 0.0)
+            row["price_ask"] = float(getattr(cached_quote, "ask", 0.0) or 0.0)
+        else:
+            row["source"] = "snapshot"
+            row["price_source"] = "snapshot"
+            row["price_age_seconds"] = 999999.0
+            row["price_stale"] = True
+            row["price_error"] = "live_price_unavailable"
+    return rows
+
+
 def _light_trade_director_status(
     *,
     candidate_source: str,
@@ -505,12 +569,12 @@ async def api_radar():
         else:
             _start_radar_scan_background()
             scan_error = "radar_scan_warming_up"
-    top_confirmed = [x.asdict() for x in radar_engine.top4]
+    top_confirmed = _radar_items_with_live_prices(list(radar_engine.top4))
     scan_status = _radar_api_scan_status()
     return {
         "ok": not bool(scan_error),
         "error": scan_error,
-        "top50":[x.asdict() for x in radar_engine.top50],
+        "top50": _radar_items_with_live_prices(list(radar_engine.top50)),
         "top4":top_confirmed,
         "top5_confirmed":top_confirmed,
         "trade_top5": top_confirmed,

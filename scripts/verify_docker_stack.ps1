@@ -32,7 +32,7 @@ function Assert-True {
 
 function Read-Json {
     param([string]$Url)
-    $response = Invoke-WebRequest -Uri $Url -TimeoutSec 40
+    $response = Read-HttpTextWithRetry -Url $Url -Retries 5 -DelaySeconds 2 -TimeoutSec 40
     $content = [string]$response.Content
     Assert-True (-not [string]::IsNullOrWhiteSpace($content)) "empty JSON response from $Url"
     $parsed = $content | ConvertFrom-Json
@@ -415,9 +415,17 @@ Invoke-Step "database path uses mounted Docker volume" {
 }
 
 Invoke-Step "monitor state uses mainnet market data" {
-    $state = Read-Json "$MonitorBaseUrl/api/state"
+    $state = $null
+    $btc = $null
+    for ($i = 0; $i -lt 30; $i++) {
+        $state = Read-Json "$MonitorBaseUrl/api/state"
+        $btc = Get-MonitorMajor -State $state -Symbol "BTCUSDT"
+        if ($state.market_data_source -eq "mainnet" -and $null -ne $btc -and [double]$btc.price -gt 0) {
+            break
+        }
+        Start-Sleep -Seconds 1
+    }
     Assert-True ($state.market_data_source -eq "mainnet") "market_data_source is '$($state.market_data_source)', expected mainnet"
-    $btc = Get-MonitorMajor -State $state -Symbol "BTCUSDT"
     Assert-True ($null -ne $btc) "BTCUSDT is missing from monitor major market cards"
     Assert-True ([double]$btc.price -gt 0) "BTCUSDT monitor price is not positive"
 }

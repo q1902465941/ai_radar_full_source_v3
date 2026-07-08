@@ -47,12 +47,33 @@ class BinanceFactorSource:
         self._ticker_last_prices: dict[str, tuple[float, float]] = {}
         self.last_ticker_rows: dict[str, dict[str, Any]] = {}
         self.last_ticker_rows_updated_at = 0.0
+        self._refresh_lock: asyncio.Lock | None = None
+        self._refresh_lock_loop_id: int | None = None
 
     async def get_snapshots(self, force_refresh: bool = False) -> list[MarketSnapshot]:
         now = time.monotonic()
         if not force_refresh and self._cache and now - self._cache_ts < settings.binance_factor_ttl_seconds:
             return list(self._cache)
 
+        lock = self._refresh_lock_for_loop()
+        waited_for_refresh = lock.locked()
+        async with lock:
+            now = time.monotonic()
+            if self._cache and (
+                waited_for_refresh
+                or (not force_refresh and now - self._cache_ts < settings.binance_factor_ttl_seconds)
+            ):
+                return list(self._cache)
+            return await self._refresh_snapshots()
+
+    def _refresh_lock_for_loop(self) -> asyncio.Lock:
+        loop_id = id(asyncio.get_running_loop())
+        if self._refresh_lock is None or self._refresh_lock_loop_id != loop_id:
+            self._refresh_lock = asyncio.Lock()
+            self._refresh_lock_loop_id = loop_id
+        return self._refresh_lock
+
+    async def _refresh_snapshots(self) -> list[MarketSnapshot]:
         started = time.monotonic()
         self._begin_refresh_diagnostics()
         self.last_failed_symbols = []
@@ -124,7 +145,7 @@ class BinanceFactorSource:
             if snapshots:
                 self._mark_degraded_for_excessive_kline_missing(len(snapshots))
                 self._cache = snapshots
-                self._cache_ts = now
+                self._cache_ts = time.monotonic()
                 self._finish_refresh_diagnostics(len(snapshots))
                 return list(snapshots)
             return self._cached_or_empty("snapshot_build_empty")
@@ -148,6 +169,15 @@ class BinanceFactorSource:
             else:
                 self._mark_warning(reason)
         return []
+
+    async def _safe_symbol_fetch(self, fetch, default: Any) -> Any:
+        for attempt in range(2):
+            try:
+                return await fetch()
+            except Exception:
+                if attempt == 0:
+                    await asyncio.sleep(0.25)
+        return list(default) if isinstance(default, list) else dict(default) if isinstance(default, dict) else default
 
     async def _refresh_exchange_symbol_meta(self) -> None:
         if not settings.binance_crypto_perpetual_only:
@@ -499,28 +529,22 @@ class BinanceFactorSource:
 
     async def _snapshot(self, symbol: str, premium: dict[str, Any], ticker: dict[str, Any]) -> MarketSnapshot:
         oi_hist_task = (
-            self.client.open_interest_hist(symbol, settings.binance_oi_period, 30)
+            self._safe_symbol_fetch(lambda: self.client.open_interest_hist(symbol, settings.binance_oi_period, 30), [])
             if settings.binance_use_open_interest_hist
             else _empty_list()
         )
         taker_task = (
-            self.client.taker_long_short_ratio(symbol, settings.binance_oi_period, 5)
+            self._safe_symbol_fetch(lambda: self.client.taker_long_short_ratio(symbol, settings.binance_oi_period, 5), [])
             if settings.binance_use_taker_ratio_endpoint
             else _empty_list()
         )
         klines, depth, oi_now, oi_hist, taker_rows = await asyncio.gather(
-            self.client.klines(symbol, settings.binance_kline_interval, settings.binance_kline_limit),
-            self.client.depth(symbol, settings.binance_depth_limit),
-            self.client.open_interest(symbol),
+            self._safe_symbol_fetch(lambda: self.client.klines(symbol, settings.binance_kline_interval, settings.binance_kline_limit), []),
+            self._safe_symbol_fetch(lambda: self.client.depth(symbol, settings.binance_depth_limit), {}),
+            self._safe_symbol_fetch(lambda: self.client.open_interest(symbol), {}),
             oi_hist_task,
             taker_task,
-            return_exceptions=True,
         )
-        klines = [] if isinstance(klines, Exception) else klines
-        depth = {} if isinstance(depth, Exception) else depth
-        oi_now = {} if isinstance(oi_now, Exception) else oi_now
-        oi_hist = [] if isinstance(oi_hist, Exception) else oi_hist
-        taker_rows = [] if isinstance(taker_rows, Exception) else taker_rows
 
         kline_features = _kline_features(_as_list(klines))
         blockers = [str(item) for item in (kline_features.get("quality_blockers") or []) if item]
@@ -535,10 +559,10 @@ class BinanceFactorSource:
         taker_buy_ratio, taker_sell_ratio = _taker_ratio(_as_list(taker_rows), kline_features)
         oi_change = self._open_interest_change(symbol, oi_now, _as_list(oi_hist))
         price = _first_positive(
+            kline_features.get("price"),
             ticker.get("lastPrice"),
             ticker.get("price"),
             premium.get("markPrice"),
-            kline_features.get("price"),
         )
 
         return MarketSnapshot(

@@ -984,7 +984,7 @@ def test_binance_factor_source_builds_real_factor_snapshot(monkeypatch):
     snaps = __import__("asyncio").run(source.get_snapshots())
     assert len(snaps) == 2
     btc = next(s for s in snaps if s.symbol == "BTCUSDT")
-    assert btc.price == 129
+    assert btc.price == 130
     assert btc.change_5m > 0
     assert btc.change_15m > 0
     assert btc.change_1h > 0
@@ -1016,12 +1016,46 @@ def test_binance_factor_source_prefers_last_price_over_mark_price(monkeypatch):
         async def ticker_24hr(self, symbol=None):
             return [{"symbol": "BTCUSDT", "lastPrice": "129", "quoteVolume": "2000000"}]
 
+        async def klines(self, symbol, interval="5m", limit=30):
+            return []
+
     source = BinanceFactorSource(client=DivergedPriceClient())
     snaps = __import__("asyncio").run(source.get_snapshots(force_refresh=True))
 
     assert len(snaps) == 1
     assert snaps[0].symbol == "BTCUSDT"
     assert snaps[0].price == 129
+
+
+def test_binance_factor_source_prefers_fresh_kline_close_over_stale_ticker(monkeypatch):
+    monkeypatch.setattr(settings, "radar_exclude_major_symbols_from_anomaly", False)
+    monkeypatch.setattr(settings, "binance_symbol_limit", 1)
+    monkeypatch.setattr(settings, "binance_factor_concurrency", 1)
+    monkeypatch.setattr(settings, "binance_factor_ttl_seconds", 0)
+    monkeypatch.setattr(settings, "binance_use_open_interest_hist", False)
+    monkeypatch.setattr(settings, "binance_use_taker_ratio_endpoint", False)
+
+    class StaleTickerClient(FakeBinanceMarketClient):
+        async def exchange_info(self):
+            return {"symbols": [_exchange_symbol_meta("BTCUSDT")]}
+
+        async def premium_index(self):
+            return [{"symbol": "BTCUSDT", "markPrice": "100", "lastFundingRate": "0.0001"}]
+
+        async def ticker_24hr(self, symbol=None):
+            return [{"symbol": "BTCUSDT", "lastPrice": "95", "quoteVolume": "2000000"}]
+
+        async def klines(self, symbol, interval="5m", limit=30):
+            rows = await super().klines(symbol, interval, limit)
+            rows[-1][4] = "130"
+            return rows
+
+    source = BinanceFactorSource(client=StaleTickerClient())
+    snaps = __import__("asyncio").run(source.get_snapshots(force_refresh=True))
+
+    assert len(snaps) == 1
+    assert snaps[0].symbol == "BTCUSDT"
+    assert snaps[0].price == 130
 
 
 def test_binance_factor_source_keeps_snapshot_when_kline_missing(monkeypatch):
@@ -1044,6 +1078,37 @@ def test_binance_factor_source_keeps_snapshot_when_kline_missing(monkeypatch):
     assert snaps[0].price > 0
     assert "kline_missing" in (snaps[0].structure_metrics.get("quality_blockers") or [])
     assert source.last_failed_symbols == []
+
+
+def test_binance_factor_source_retries_transient_kline_timeout(monkeypatch):
+    monkeypatch.setattr(settings, "radar_exclude_major_symbols_from_anomaly", False)
+    monkeypatch.setattr(settings, "binance_symbol_limit", 1)
+    monkeypatch.setattr(settings, "binance_factor_concurrency", 1)
+    monkeypatch.setattr(settings, "binance_factor_ttl_seconds", 0)
+    monkeypatch.setattr(settings, "binance_use_open_interest_hist", False)
+    monkeypatch.setattr(settings, "binance_use_taker_ratio_endpoint", False)
+
+    class FlakyKlineClient(FakeBinanceMarketClient):
+        kline_attempts = 0
+
+        async def exchange_info(self):
+            return {"symbols": [_exchange_symbol_meta("BTCUSDT")]}
+
+        async def klines(self, symbol, interval="5m", limit=30):
+            self.kline_attempts += 1
+            if self.kline_attempts == 1:
+                raise RuntimeError("ReadTimeout:https://fapi.binance.com/fapi/v1/klines")
+            return await super().klines(symbol, interval, limit)
+
+    client = FlakyKlineClient()
+    source = BinanceFactorSource(client=client)
+    snaps = __import__("asyncio").run(source.get_snapshots(force_refresh=True))
+
+    assert client.kline_attempts == 2
+    assert len(snaps) == 1
+    assert snaps[0].price == 130
+    assert "kline_missing" not in (snaps[0].structure_metrics.get("quality_blockers") or [])
+    assert source.last_kline_missing_symbols == []
 
 
 def test_binance_factor_source_does_not_degrade_for_sparse_kline_missing(monkeypatch):
@@ -1113,6 +1178,46 @@ def test_binance_factor_source_degrades_for_excessive_kline_missing(monkeypatch)
     assert source.last_refresh_degraded is True
     assert "snapshot_quality:kline_missing:3/10" in source.last_refresh_error
     assert source.last_kline_missing_symbols[:3] == ["EXMISS0USDT", "EXMISS1USDT", "EXMISS2USDT"]
+
+
+def test_binance_factor_source_serializes_overlapping_force_refreshes(monkeypatch):
+    monkeypatch.setattr(settings, "radar_exclude_major_symbols_from_anomaly", False)
+    monkeypatch.setattr(settings, "binance_symbol_limit", 1)
+    monkeypatch.setattr(settings, "binance_factor_concurrency", 1)
+    monkeypatch.setattr(settings, "binance_factor_ttl_seconds", 0)
+    monkeypatch.setattr(settings, "binance_use_open_interest_hist", False)
+    monkeypatch.setattr(settings, "binance_use_taker_ratio_endpoint", False)
+    async_lib = __import__("asyncio")
+    first_refresh_started = async_lib.Event()
+    release_refresh = async_lib.Event()
+
+    class BlockingRefreshClient(FakeBinanceMarketClient):
+        premium_calls = 0
+
+        async def premium_index(self):
+            self.premium_calls += 1
+            first_refresh_started.set()
+            await release_refresh.wait()
+            return await super().premium_index()
+
+    client = BlockingRefreshClient()
+    source = BinanceFactorSource(client=client)
+
+    async def run_concurrent_refreshes():
+        first = async_lib.create_task(source.get_snapshots(force_refresh=True))
+        await async_lib.wait_for(first_refresh_started.wait(), timeout=1.0)
+        second = async_lib.create_task(source.get_snapshots(force_refresh=True))
+        await async_lib.sleep(0)
+        assert client.premium_calls == 1
+        release_refresh.set()
+        first_result, second_result = await async_lib.gather(first, second)
+        return first_result, second_result
+
+    first_result, second_result = async_lib.run(run_concurrent_refreshes())
+
+    assert client.premium_calls == 1
+    assert [row.symbol for row in first_result] == ["BTCUSDT"]
+    assert [row.symbol for row in second_result] == ["BTCUSDT"]
 
 
 def test_binance_symbol_selection_includes_movers_after_priority(monkeypatch):
@@ -2715,6 +2820,19 @@ def test_active_coin_registry_refreshes_expires_and_cools_down():
     assert diag["active_count"] == 0
     assert diag["cooldown_count"] == 1
     assert diag["recent_removed"][0]["reason"] == "idle_timeout"
+
+
+def test_active_coin_registry_does_not_cool_down_current_idle_candidate():
+    registry = ActiveCoinRegistry(idle_seconds=180, cooldown_seconds=120, max_symbols=5)
+
+    registry.update_candidates(["HOTUSDT"], now=100.0, score_by_symbol={"HOTUSDT": 9.0})
+    updated = registry.update_candidates(["HOTUSDT"], now=301.0, score_by_symbol={"HOTUSDT": 12.0})
+
+    assert [coin.symbol for coin in updated] == ["HOTUSDT"]
+    assert registry.active_symbols() == ["HOTUSDT"]
+    diag = registry.diagnostics(now=301.0)
+    assert diag["cooldown_count"] == 0
+    assert diag["active"][0]["current_score"] == 12.0
 
 
 def test_active_coin_registry_replaces_lowest_priority_when_full():
@@ -7488,7 +7606,7 @@ def test_paper_probe_entry_requires_ai_strategy_generation(monkeypatch):
 
     monkeypatch.setattr(autotrader, "_account_context", fake_account_context)
     monkeypatch.setattr(market_service, "price_for", fake_price)
-    monkeypatch.setattr(openai_strategy_client, "generate", fake_generate)
+    monkeypatch.setattr(ai_service, "generate_strategy", fake_generate)
     monkeypatch.setattr(auto_trading_risk_model, "decide", fake_decide)
 
     result = __import__("asyncio").run(autotrader._run_once_locked())
@@ -7945,7 +8063,7 @@ def test_production_acceptance_rejects_open_decision_when_execution_mode_is_pape
     monkeypatch.setattr(radar_engine, "scan", fake_scan)
     monkeypatch.setattr(radar_engine, "select_ai_candidates", lambda items: [item])
     monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([item], "strict"))
-    monkeypatch.setattr(openai_strategy_client, "generate", fake_generate)
+    monkeypatch.setattr(ai_service, "generate_strategy", fake_generate)
     monkeypatch.setattr(autotrader, "_account_context", fake_account_context)
     patch_ok_production_strategy_geometry(monkeypatch)
     monkeypatch.setattr(
@@ -8022,7 +8140,7 @@ def test_production_acceptance_uses_strict_candidates_not_paper_top(monkeypatch)
 
     monkeypatch.setattr(radar_engine, "scan", fake_scan)
     monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([paper_item], "paper_top"))
-    monkeypatch.setattr(openai_strategy_client, "generate", fake_generate)
+    monkeypatch.setattr(ai_service, "generate_strategy", fake_generate)
     patch_ok_production_strategy_geometry(monkeypatch)
 
     out = __import__("asyncio").run(production_acceptance_runner.run(mode="preflight", manage_seconds=0))
@@ -8079,7 +8197,7 @@ def test_production_acceptance_tries_next_strict_candidate_after_wait(monkeypatc
     monkeypatch.setattr(radar_engine, "scan", fake_scan)
     monkeypatch.setattr(radar_engine, "select_ai_candidates", lambda items: [first, second])
     monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([first], "strict"))
-    monkeypatch.setattr(openai_strategy_client, "generate", fake_generate)
+    monkeypatch.setattr(ai_service, "generate_strategy", fake_generate)
     monkeypatch.setattr(autotrader, "_account_context", fake_account_context)
     patch_ok_production_strategy_geometry(monkeypatch)
     monkeypatch.setattr(
@@ -8087,7 +8205,7 @@ def test_production_acceptance_tries_next_strict_candidate_after_wait(monkeypatc
         "decide",
         lambda item, plan, account, market, paper_probe=False: ExecutionPlan(
             decision="OPEN",
-            mode="paper",
+            mode="live",
             symbol=plan.symbol,
             side=plan.side,
             dynamic_margin=25,
@@ -8166,7 +8284,7 @@ def test_production_acceptance_tries_next_candidate_after_risk_reject(monkeypatc
     monkeypatch.setattr(radar_engine, "scan", fake_scan)
     monkeypatch.setattr(radar_engine, "select_ai_candidates", lambda items: [first, second])
     monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([first, second], "strict"))
-    monkeypatch.setattr(openai_strategy_client, "generate", fake_generate)
+    monkeypatch.setattr(ai_service, "generate_strategy", fake_generate)
     monkeypatch.setattr(autotrader, "_account_context", fake_account_context)
     monkeypatch.setattr(auto_trading_risk_model, "decide", fake_decide)
     patch_ok_production_strategy_geometry(monkeypatch)
@@ -8178,6 +8296,243 @@ def test_production_acceptance_tries_next_candidate_after_risk_reject(monkeypatc
     assert stages["ai_strategy_plan"]["evidence"]["symbol"] == "RISKSECONDUSDT"
     assert stages["risk_model"]["ok"] is True
     assert [row["decision"] for row in stages["risk_model"]["evidence"]["risk_attempts"]] == ["OBSERVE", "OPEN"]
+
+
+def test_production_acceptance_refreshes_stale_cached_geometry_before_codex(monkeypatch):
+    from dataclasses import replace
+
+    stale_item = high_quality_item(symbol="STALEGEOMETRYUSDT", side="LONG", price=100)
+    fresh_item = replace(stale_item, price=99)
+    stale_sample = ok_strategy_geometry_sample(stale_item)
+    sampled_prices = []
+    generated_entries = []
+
+    async def fake_fresh_item(candidate):
+        return fresh_item
+
+    async def fake_geometry(candidate):
+        sampled_prices.append(candidate.price)
+        return ok_strategy_geometry_sample(candidate)
+
+    async def fake_generate(candidate, performance, candidate_source, candidate_attempts, strategy_geometry_sample=None):
+        geometry = strategy_geometry_sample["selected_geometry"]
+        entry = float(geometry["entry"])
+        generated_entries.append(entry)
+        plan = StrategyPlan(
+            strategy_id=f"fresh_geometry_{candidate.symbol}",
+            action="OPEN_LONG",
+            symbol=candidate.symbol,
+            side="LONG",
+            entry_zone_low=round(entry * 0.999, 8),
+            entry_zone_high=round(entry * 1.001, 8),
+            ideal_entry_price=entry,
+            stop_loss=float(geometry["stop_loss"]),
+            tp1=float(geometry["tp1"]),
+            tp2=float(geometry["tp2"]),
+            confidence=70,
+            reason="test fresh geometry",
+            raw={"provider": "codex_cli"},
+        )
+        plan.raw["strategy_contract"] = build_rule_contract(candidate, plan)
+        return plan
+
+    async def fake_account_context(open_positions):
+        return (
+            {"mode": "live", "configured": True, "canTrade": True, "walletBalance": 1000, "availableBalance": 1000},
+            {"equity": 1000, "available_balance": 1000, "trade_mode": "live", "execution_context": "live"},
+        )
+
+    def fake_decide(item, plan, account, market, paper_probe=False):
+        is_fresh = abs(float(item.price) - 99.0) < 0.000001 and abs(float(plan.ideal_entry_price) - 99.0) < 0.000001
+        return ExecutionPlan(
+            decision="OPEN" if is_fresh else "OBSERVE",
+            mode="live" if is_fresh else "paper",
+            symbol=plan.symbol,
+            side=plan.side,
+            dynamic_margin=25 if is_fresh else 0,
+            dynamic_leverage=2 if is_fresh else 0,
+            quantity=0.5 if is_fresh else 0,
+            entry_price=plan.ideal_entry_price,
+            stop_loss=plan.stop_loss,
+            tp1=plan.tp1,
+            tp2=plan.tp2,
+            tp1_close_ratio=0.5,
+            tp2_close_ratio=1.0,
+            management_mode="TEST" if is_fresh else "NONE",
+            cooldown_after_trade=60,
+            reason="fresh geometry open" if is_fresh else "market price outside entry zone",
+            notional=50 if is_fresh else 0,
+            risk_usdt=1 if is_fresh else 0,
+            risk_pct=0.001 if is_fresh else 0,
+            strategy_contract=plan.raw.get("strategy_contract", {}),
+        )
+
+    monkeypatch.setattr(production_acceptance_runner, "_fresh_item", fake_fresh_item)
+    monkeypatch.setattr("backend.trading.production_acceptance.strategy_geometry_sampler.evaluate", fake_geometry)
+    monkeypatch.setattr(production_acceptance_runner, "_generate_plan", fake_generate)
+    monkeypatch.setattr(autotrader, "_account_context", fake_account_context)
+    monkeypatch.setattr(auto_trading_risk_model, "decide", fake_decide)
+    monkeypatch.setattr(
+        autotrader,
+        "_ai_candidate_freshness_report",
+        lambda candidate, source, performance: (True, {"reasons": []}),
+    )
+    monkeypatch.setattr(
+        ai_strategy_feedback,
+        "evaluate_candidate",
+        lambda candidate: {"candidate_feedback": {"generation_gate": {"allow_open_plan": True, "reasons": []}}},
+    )
+
+    out = asyncio.run(
+        production_acceptance_runner._try_generate_and_risk_open(
+            [stale_item],
+            {},
+            "strict",
+            [],
+            open_positions=0,
+            candidate_geometry_samples={stale_item.symbol: stale_sample},
+        )
+    )
+
+    assert sampled_prices == [99]
+    assert generated_entries == [99]
+    assert out["risk_ok"] is True
+    assert out["risk_attempts"][0]["decision"] == "OPEN"
+
+
+def test_production_acceptance_falls_back_to_strict_geometry_after_strict_wait(monkeypatch):
+    strict = high_quality_item(symbol="STRICTWAITUSDT", side="SHORT", price=100)
+    geometry = high_quality_item(symbol="GEOMETRYOPENUSDT", side="LONG", price=100)
+    radar_engine.top50 = [strict, geometry]
+    strict_sample = ok_strategy_geometry_sample(strict)
+    geometry_sample = ok_strategy_geometry_sample(geometry)
+    seen = []
+
+    async def fake_scan(force_refresh=False):
+        radar_engine.top50 = [strict, geometry]
+        radar_engine.last_scan_id = "scan_strict_geometry_fallback"
+        radar_engine.last_scan_time = "12:00:00"
+        return radar_engine.top50
+
+    strict_feature = SimpleNamespace(
+        feature_score=100.0,
+        estimated_win_rate=0.56,
+        selection_score=85.0,
+        reasons=["strict"],
+        failure_risks=[],
+    )
+    geometry_feature = SimpleNamespace(
+        feature_score=100.0,
+        estimated_win_rate=0.41,
+        selection_score=82.0,
+        reasons=["historical_negative_estimate_capped"],
+        failure_risks=[],
+    )
+
+    def fake_candidate_check(candidate):
+        if candidate.symbol == strict.symbol:
+            return True, strict_feature, []
+        return False, geometry_feature, ["cyqnt_win_rate_low"]
+
+    async def fake_geometry_order(candidates, candidate_source, performance_context=None):
+        if candidate_source == "strict":
+            autotrader._candidate_geometry_samples[strict.symbol] = strict_sample
+            return [strict], [
+                {"symbol": strict.symbol, "geometry_status": "ok", "sample_count": 120, "win_rate": 0.64, "expected_r": 0.42, "profit_factor": 1.82, "pass_count": 12}
+            ]
+        assert candidate_source == "strict_geometry"
+        assert [candidate.symbol for candidate in candidates] == [geometry.symbol]
+        autotrader._candidate_geometry_samples[geometry.symbol] = geometry_sample
+        return [geometry], [
+            {"symbol": geometry.symbol, "geometry_status": "ok", "sample_count": 120, "win_rate": 0.64, "expected_r": 0.42, "profit_factor": 1.82, "pass_count": 12}
+        ]
+
+    async def fake_generate(candidate, performance, candidate_source, candidate_attempts, strategy_geometry_sample=None):
+        seen.append((candidate.symbol, candidate_source, strategy_geometry_sample))
+        if candidate.symbol == strict.symbol:
+            return StrategyPlan(
+                strategy_id="strict_wait",
+                action="WAIT",
+                symbol=candidate.symbol,
+                side="NEUTRAL",
+                entry_zone_low=candidate.price,
+                entry_zone_high=candidate.price,
+                ideal_entry_price=candidate.price,
+                stop_loss=0.0,
+                tp1=0.0,
+                tp2=0.0,
+                confidence=0.0,
+                reason="strict candidate rejected by Codex",
+                wait_type="TEST",
+                raw={"provider": "codex_cli"},
+            )
+        plan = rule_strategy_generator.generate(candidate)
+        plan.raw["provider"] = "codex_cli"
+        return plan
+
+    async def fake_account_context(open_positions):
+        return (
+            {"mode": "test", "configured": True, "canTrade": True, "walletBalance": 1000, "availableBalance": 1000},
+            {"equity": 1000, "available_balance": 1000, "execution_context": "test"},
+        )
+
+    monkeypatch.setattr(learning_data_audit, "summary", lambda force=False, limit=None: {"production_grade": True, "trust_level": "PRODUCTION", "reasons": []})
+    monkeypatch.setattr(radar_engine, "scan", fake_scan)
+    monkeypatch.setattr(radar_engine, "select_ai_candidates", lambda items: [strict])
+    monkeypatch.setattr(radar_engine, "_production_candidate_check", fake_candidate_check)
+    monkeypatch.setattr(radar_engine, "select_ai_review_candidates", lambda items: [])
+    monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([strict], "strict"))
+    monkeypatch.setattr(autotrader, "_geometry_supported_candidate_order", fake_geometry_order)
+    monkeypatch.setattr(production_acceptance_runner, "_generate_plan", fake_generate)
+    monkeypatch.setattr(autotrader, "_account_context", fake_account_context)
+    monkeypatch.setattr(live_readiness, "summary", lambda: {"current_stage": "paper_probe", "metrics": {}, "stage_readiness": {}})
+    monkeypatch.setattr(
+        autotrader,
+        "_ai_candidate_freshness_report",
+        lambda candidate, source, performance: (True, {"reasons": []}),
+    )
+    monkeypatch.setattr(
+        ai_strategy_feedback,
+        "evaluate_candidate",
+        lambda candidate: {"candidate_feedback": {"generation_gate": {"allow_open_plan": True, "reasons": []}}},
+    )
+    monkeypatch.setattr(
+        auto_trading_risk_model,
+        "decide",
+        lambda item, plan, account, market, paper_probe=False: ExecutionPlan(
+            decision="OPEN",
+            mode="live",
+            symbol=plan.symbol,
+            side=plan.side,
+            dynamic_margin=25,
+            dynamic_leverage=2,
+            quantity=0.5,
+            entry_price=plan.ideal_entry_price,
+            stop_loss=plan.stop_loss,
+            tp1=plan.tp1,
+            tp2=plan.tp2,
+            tp1_close_ratio=0.5,
+            tp2_close_ratio=1.0,
+            management_mode="TEST",
+            cooldown_after_trade=60,
+            reason="test open",
+            notional=50,
+            risk_usdt=1,
+            risk_pct=0.001,
+            strategy_contract=plan.raw.get("strategy_contract", {}),
+        ),
+    )
+
+    out = asyncio.run(production_acceptance_runner.run(mode="preflight", manage_seconds=0))
+    stages = {stage["name"]: stage for stage in out["stages"]}
+
+    assert stages["candidate_selection"]["evidence"]["candidate_symbols"] == [strict.symbol]
+    assert stages["strict_geometry_fallback"]["ok"] is True
+    assert stages["strict_geometry_fallback"]["evidence"]["candidate_symbols"] == [geometry.symbol]
+    assert stages["ai_strategy_plan"]["ok"] is True
+    assert stages["ai_strategy_plan"]["evidence"]["symbol"] == geometry.symbol
+    assert stages["risk_model"]["ok"] is True
+    assert seen == [(strict.symbol, "strict", strict_sample), (geometry.symbol, "strict_geometry", geometry_sample)]
 
 
 def test_production_acceptance_prioritizes_geometry_supported_strict_candidates(monkeypatch):
@@ -8570,7 +8925,7 @@ def test_production_acceptance_shadow_reviews_when_no_strict_candidate(monkeypat
     monkeypatch.setattr(radar_engine, "select_ai_candidates", lambda items: [])
     monkeypatch.setattr(radar_engine, "select_ai_review_candidates", lambda items: [review_item])
     monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([review_item], "strict_review"))
-    monkeypatch.setattr(openai_strategy_client, "generate", fake_generate)
+    monkeypatch.setattr(ai_service, "generate_strategy", fake_generate)
     patch_ok_production_strategy_geometry(monkeypatch)
 
     out = __import__("asyncio").run(production_acceptance_runner.run(mode="preflight", manage_seconds=0))
@@ -9152,6 +9507,7 @@ def test_production_acceptance_skips_codex_when_generation_gate_blocks(monkeypat
 
     monkeypatch.setattr(production_acceptance_runner, "_fresh_item", fake_fresh_item)
     monkeypatch.setattr(production_acceptance_runner, "_generate_plan", fail_generate)
+    patch_ok_production_strategy_geometry(monkeypatch)
     monkeypatch.setattr(
         autotrader,
         "_ai_candidate_freshness_report",
@@ -9176,6 +9532,50 @@ def test_production_acceptance_skips_codex_when_generation_gate_blocks(monkeypat
     assert out["plan"].action == "WAIT"
     assert out["plan_attempts"][0]["provider"] == "generation_gate"
     assert out["plan_attempts"][0]["validation_reason"] == "cyqnt_estimated_win_rate_low"
+
+
+def test_production_acceptance_skips_codex_when_review_lacks_material_improvement(monkeypatch):
+    item = high_quality_item(symbol="REVIEWNODIFFUSDT", side="LONG", price=100)
+
+    async def fake_fresh_item(candidate):
+        return candidate
+
+    async def fail_generate(*args, **kwargs):
+        raise AssertionError("review-required candidates without material improvement should block before Codex")
+
+    monkeypatch.setattr(production_acceptance_runner, "_fresh_item", fake_fresh_item)
+    monkeypatch.setattr(production_acceptance_runner, "_generate_plan", fail_generate)
+    patch_ok_production_strategy_geometry(monkeypatch)
+    monkeypatch.setattr(
+        autotrader,
+        "_ai_candidate_freshness_report",
+        lambda candidate, source, performance: (True, {"reasons": []}),
+    )
+    monkeypatch.setattr(
+        ai_strategy_feedback,
+        "evaluate_candidate",
+        lambda candidate: {
+            "candidate_feedback": {
+                "generation_gate": {
+                    "allow_open_plan": True,
+                    "review_required": True,
+                    "reasons": [],
+                    "review_reasons": ["feature_overlap_side"],
+                },
+                "candidate_learning_delta": {
+                    "material_improvements_vs_losses": [],
+                    "overlaps_with_losing_risks": [{"name": "event_win_rate_low", "count": 2}],
+                },
+            }
+        },
+    )
+
+    out = asyncio.run(production_acceptance_runner._try_generate_open_plan([item], {}, "strict", []))
+
+    assert out["provider"] == "generation_gate"
+    assert out["plan"].action == "WAIT"
+    assert out["plan_attempts"][0]["provider"] == "generation_gate"
+    assert out["plan_attempts"][0]["validation_reason"] == "review_required_without_material_improvement"
 
 
 def test_production_acceptance_skips_codex_when_strategy_geometry_is_weak(monkeypatch):
@@ -10994,6 +11394,46 @@ def test_api_radar_returns_compact_stream_diagnostics(monkeypatch):
     assert result["dynamic_stream"] == {"active_count": 120, "running": True, "last_error": ""}
     assert "active" not in result["scan_status"]["active_coins"]
     assert "streams" not in result["scan_status"]["dynamic_stream"]
+
+
+def test_api_radar_overlays_live_ticker_price_for_display(monkeypatch):
+    from backend import main
+
+    item = high_quality_item(symbol="LIVEPXUSDT", side="LONG", price=100)
+
+    class CachedRadar:
+        top50 = [item]
+        top4 = [item]
+        last_scan_id = "scan_live_px"
+
+        def scan_in_progress(self):
+            return False
+
+        def scan_status(self):
+            return {"in_progress": False, "top50_count": 1}
+
+    monkeypatch.setattr(main, "radar_engine", CachedRadar())
+    monkeypatch.setattr(
+        main,
+        "_ws_ticker_rows_by_symbol",
+        lambda symbols: {
+            "LIVEPXUSDT": {
+                "lastPrice": "112.5",
+                "priceChangePercent": "8.1",
+                "quoteVolume": "1234567",
+            }
+        },
+    )
+
+    result = __import__("asyncio").run(main.api_radar())
+
+    row = result["top50"][0]
+    assert row["price"] == 112.5
+    assert row["snapshot_price"] == 100
+    assert row["price_source"] == "ws_ticker_last_price"
+    assert row["source"] == "ws_ticker_last_price"
+    assert row["price_age_seconds"] == 0.0
+    assert result["top4"][0]["price"] == 112.5
 
 
 def test_radar_scan_status_compact_does_not_build_full_stream_diagnostics(monkeypatch):
