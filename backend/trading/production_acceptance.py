@@ -1172,11 +1172,56 @@ class ProductionAcceptanceRunner:
                 continue
             if float(getattr(feature, "selection_score", 0.0) or 0.0) < 68.0:
                 continue
+            if not self._strict_geometry_current_context_ok(item, feature):
+                continue
             if not self._strict_geometry_feedback_ok(item):
                 continue
             scored.append((radar_engine._production_candidate_rank(item, feature), item))
         scored.sort(key=lambda row: row[0], reverse=True)
         return [item for _, item in scored]
+
+    def _strict_geometry_current_context_ok(self, item: RadarItem, feature: Any) -> bool:
+        risks = getattr(feature, "failure_risks", [])
+        if not isinstance(risks, list):
+            risks = []
+        hard_current_risks = {
+            "flow_negative",
+            "funding_negative",
+            "wick_above_paper_noise_budget",
+            "current_wick_extreme",
+            "fake_breakout_risk_high",
+            "side_conflict",
+        }
+        if hard_current_risks.intersection({str(risk) for risk in risks}):
+            return False
+
+        side = str(item.direction or "")
+        if side not in {"LONG", "SHORT"}:
+            return False
+        if side == "LONG":
+            taker_aligned = float(item.taker_buy_ratio or 0.0) >= 0.55
+            depth_aligned = float(item.depth_imbalance or 0.0) >= 0.08
+        else:
+            taker_aligned = float(item.taker_sell_ratio or 0.0) >= 0.55
+            depth_aligned = float(item.depth_imbalance or 0.0) <= -0.08
+        if not (taker_aligned or depth_aligned):
+            return False
+
+        score_features = item.score_features if isinstance(item.score_features, dict) else {}
+        universal_features = score_features.get("universal_anomaly_model")
+        universal = universal_features if isinstance(universal_features, dict) else {}
+        if universal:
+            probabilities = universal.get("probabilities") if isinstance(universal.get("probabilities"), dict) else {}
+            side_probability = _safe_float(probabilities.get(side))
+            confidence = _safe_float(universal.get("confidence"))
+            direction = str(universal.get("direction") or "")
+            if direction not in {side, ""}:
+                return False
+            if side_probability and side_probability < 0.55:
+                return False
+            if confidence and confidence < 55.0:
+                return False
+        return True
 
     def _strict_geometry_feedback_ok(self, item: RadarItem) -> bool:
         try:

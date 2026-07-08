@@ -51,9 +51,27 @@ class LearningDataAudit:
             return self._cache
 
         sample_limit = max(100, int(limit or settings.trade_attribution_sample_limit))
-        replay_samples = replay_memory.samples(limit=sample_limit) if settings.replay_enabled else []
-        closed_samples = trade_memory.samples(limit=sample_limit, require_radar=True)
-        raw_closed_rows = db.list_closed(limit=100000)
+        source_errors: dict[str, str] = {}
+        replay_samples: list[dict[str, Any]] = []
+        if settings.replay_enabled:
+            try:
+                replay_samples = replay_memory.samples(limit=sample_limit)
+            except Exception as exc:
+                source_errors["replay_samples"] = f"{type(exc).__name__}:{exc}"
+            else:
+                replay_error = str(getattr(replay_memory, "last_error", "") or "")
+                if replay_error:
+                    source_errors["replay_samples"] = replay_error
+        try:
+            closed_samples = trade_memory.samples(limit=sample_limit, require_radar=True)
+        except Exception as exc:
+            closed_samples = []
+            source_errors["closed_samples"] = f"{type(exc).__name__}:{exc}"
+        try:
+            raw_closed_rows = db.list_closed(limit=100000)
+        except Exception as exc:
+            raw_closed_rows = []
+            source_errors["raw_closed_rows"] = f"{type(exc).__name__}:{exc}"
         closed_total = sum(1 for row in raw_closed_rows if is_learning_close_reason(row.get("close_reason")))
         excluded_close_reason_counts = self._excluded_close_reason_counts(raw_closed_rows)
         closed_sample_providers = self._closed_sample_provider_counts(closed_samples)
@@ -72,6 +90,10 @@ class LearningDataAudit:
         evidence_span_days = max(float(radar.get("span_days") or 0.0), market_span_days)
 
         reasons: list[str] = []
+        if "replay_samples" in source_errors:
+            reasons.append("replay_audit_unavailable")
+        if "closed_samples" in source_errors or "raw_closed_rows" in source_errors:
+            reasons.append("closed_trade_audit_unavailable")
         if closed_count < min_closed and not market_backtest_passed:
             reasons.append("real_closed_samples_low")
         if replay_count > 0 and replay_ratio >= 0.80 and not market_backtest_passed:
@@ -132,6 +154,7 @@ class LearningDataAudit:
             "learning_reset_at_ms": reset_at_ms,
             "radar_snapshots": radar,
             "market_backtest": market_backtest,
+            "source_errors": source_errors,
             "instruction": (
                 "LOW/MEDIUM trust learning data may guide review and shadow validation, "
                 "but must not be presented as production-grade backtest evidence."

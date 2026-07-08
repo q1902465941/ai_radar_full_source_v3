@@ -14,6 +14,7 @@ class ReplayMemory:
         self._cache_until = 0.0
         self._cache_limit = 0
         self._sample_cache: list[dict[str, Any]] = []
+        self.last_error = ""
 
     def samples(self, limit: int | None = None) -> list[dict[str, Any]]:
         limit = limit or settings.replay_max_samples
@@ -21,7 +22,15 @@ class ReplayMemory:
         if now < self._cache_until and self._cache_limit >= limit:
             return self._sample_cache[:limit]
 
-        rows = self._load_snapshots(limit)
+        try:
+            rows = self._load_snapshots(limit)
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}:{exc}"
+            self._sample_cache = []
+            self._cache_limit = limit
+            self._cache_until = now + max(1, int(settings.event_calibration_ttl_seconds))
+            return []
+        self.last_error = ""
         by_symbol: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in rows:
             by_symbol[row["symbol"]].append(row)

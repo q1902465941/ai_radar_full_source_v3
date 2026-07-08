@@ -40,6 +40,7 @@ from backend.trading.production_acceptance import production_acceptance_runner
 from backend.trading.trade_acceptance import trade_acceptance_runner
 from backend.account.account_service import account_service
 from backend.market.binance_rest import binance_rest
+from backend.market.binance_factor_source import binance_factor_source
 from backend.market.market_service import market_service
 from backend.market.binance_ws_ticker import binance_ticker_stream
 from backend.market.dynamic_symbol_stream import dynamic_symbol_stream
@@ -405,11 +406,22 @@ async def _state_major_rows() -> list[dict[str, Any]]:
         ("BNBUSDT", "BNB 永续"),
         ("SOLUSDT", "SOL 永续"),
     ]
-    ticker_rows = _ws_ticker_rows_by_symbol([sym for sym, _ in specs])
+    symbols = [sym for sym, _ in specs]
+    ws_ticker_rows = _ws_ticker_rows_by_symbol(symbols)
+    try:
+        scan_ticker_rows = binance_factor_source.ticker_rows_by_symbol(symbols)
+        scan_ticker_age = float(binance_factor_source.ticker_rows_age_seconds())
+    except Exception:
+        scan_ticker_rows = {}
+        scan_ticker_age = 999999.0
+    scan_ticker_source = str(binance_factor_source.last_refresh_source or "scan_ticker") or "scan_ticker"
     rows = []
     for sym, label in specs:
         snapshot = market_service.last_snapshots.get(sym)
-        ticker_row = ticker_rows.get(sym) or {}
+        ws_ticker_row = ws_ticker_rows.get(sym) or {}
+        scan_ticker_row = scan_ticker_rows.get(sym) or {}
+        ticker_row = ws_ticker_row or scan_ticker_row
+        ticker_source = "ws_ticker" if ws_ticker_row else scan_ticker_source
         cached_quote = market_service.cached_price_quote(sym)
         ticker_price = _ticker_last_price(ticker_row)
         cached_price = float(getattr(cached_quote, "price", 0.0) or 0.0)
@@ -419,10 +431,10 @@ async def _state_major_rows() -> list[dict[str, Any]]:
         quote_volume_24h = _optional_float(ticker_row.get("quoteVolume"))
         if ticker_price > 0:
             price = ticker_price
-            source = "ws_ticker_last_price"
+            source = f"{ticker_source}_last_price"
             stale = False
             error = ""
-            price_age_seconds = 0.0
+            price_age_seconds = 0.0 if ws_ticker_row else scan_ticker_age
         else:
             price = cached_price if cached_price > 0 else snapshot_price
             source = getattr(cached_quote, "source", "snapshot_cache" if snapshot else "unavailable")
@@ -435,7 +447,7 @@ async def _state_major_rows() -> list[dict[str, Any]]:
             change_label = "5m"
         elif change_24h is not None:
             change = change_24h
-            change_source = "ws_ticker_24h"
+            change_source = f"{ticker_source}_24h"
             change_label = "24h"
         else:
             change = 0.0

@@ -45,6 +45,8 @@ class BinanceFactorSource:
         self._exchange_symbol_meta: dict[str, dict[str, Any]] = {}
         self._exchange_meta_ts = 0.0
         self._ticker_last_prices: dict[str, tuple[float, float]] = {}
+        self.last_ticker_rows: dict[str, dict[str, Any]] = {}
+        self.last_ticker_rows_updated_at = 0.0
 
     async def get_snapshots(self, force_refresh: bool = False) -> list[MarketSnapshot]:
         now = time.monotonic()
@@ -74,6 +76,7 @@ class BinanceFactorSource:
             self.current_refresh_timings["market_rows_seconds"] = round(time.monotonic() - started, 3)
 
             premium_rows, ticker_rows = self._complete_market_rows(premium_rows, ticker_rows)
+            self._remember_ticker_rows(ticker_rows)
             if not premium_rows or not ticker_rows:
                 self._promote_current_warnings_to_degraded()
                 return self._cached_or_empty("market_rows_unavailable")
@@ -197,6 +200,39 @@ class BinanceFactorSource:
                 for row in premiums
             ]
         return premiums, tickers
+
+    def _remember_ticker_rows(self, ticker_rows: list[Any]) -> None:
+        rows = {
+            str(row.get("symbol") or "").upper(): dict(row)
+            for row in ticker_rows
+            if isinstance(row, dict) and row.get("symbol")
+        }
+        if not rows:
+            return
+        self.last_ticker_rows = rows
+        self.last_ticker_rows_updated_at = time.monotonic()
+
+    def ticker_rows_age_seconds(self) -> float:
+        if not self.last_ticker_rows_updated_at:
+            return 999999.0
+        return round(max(0.0, time.monotonic() - self.last_ticker_rows_updated_at), 3)
+
+    def ticker_rows_by_symbol(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        if not self.last_ticker_rows:
+            return {}
+        max_age = max(
+            60.0,
+            float(settings.scan_interval_seconds or 20) * 3.0,
+            float(settings.binance_factor_ttl_seconds or 30) * 3.0,
+        )
+        if self.ticker_rows_age_seconds() > max_age:
+            return {}
+        wanted = {str(symbol or "").upper() for symbol in symbols if symbol}
+        return {
+            symbol: dict(row)
+            for symbol, row in self.last_ticker_rows.items()
+            if symbol in wanted
+        }
 
     def _cached_or_empty(self, reason: str) -> list[MarketSnapshot]:
         suffix = "using_cache" if self._cache else "no_cache"

@@ -68,6 +68,13 @@ import backend.radar.radar_engine as radar_engine_module
 import backend.main as main_module
 
 
+def test_pytest_uses_isolated_sqlite_db():
+    configured = Path(settings.db_path)
+
+    assert configured.name == "ai_radar_pytest.sqlite"
+    assert "ai_radar_pytest" in configured.parts
+
+
 @pytest.fixture(autouse=True)
 def default_disable_event_calibration(monkeypatch):
     previous_acceptance = db.get_kv("production_acceptance.last_report", None)
@@ -212,6 +219,42 @@ def test_state_uses_ws_ticker_change_for_major_when_snapshots_missing(monkeypatc
     assert majors["BTCUSDT"]["change_source"] == "ws_ticker_24h"
     assert majors["BTCUSDT"]["quote_volume_24h"] == 1234567.0
     assert majors["ETHUSDT"]["change"] == -0.45
+
+
+def test_state_uses_scan_ticker_cache_for_major_when_ws_missing(monkeypatch):
+    market_service.last_snapshots = {}
+    monkeypatch.setattr(binance_rest, "last_public_source", "mainnet")
+    monkeypatch.setattr(main_module.binance_ticker_stream, "snapshot_rows", lambda: [])
+    monkeypatch.setattr(
+        binance_factor_source,
+        "ticker_rows_by_symbol",
+        lambda symbols: {
+            "BTCUSDT": {
+                "symbol": "BTCUSDT",
+                "lastPrice": "62661.9",
+                "priceChangePercent": "1.25",
+                "quoteVolume": "123456789",
+            }
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(binance_factor_source, "ticker_rows_age_seconds", lambda: 4.0, raising=False)
+    monkeypatch.setattr(binance_factor_source, "last_refresh_source", "rest_ticker")
+
+    async def fake_price_quote(symbol_arg, side_arg=None):
+        raise AssertionError("/api/state must not wait for live price_quote")
+
+    monkeypatch.setattr(market_service, "price_quote", fake_price_quote)
+
+    out = asyncio.run(main_module.state())
+    btc = {row["symbol"]: row for row in out["major"]}["BTCUSDT"]
+
+    assert btc["price"] == 62661.9
+    assert btc["source"] == "rest_ticker_last_price"
+    assert btc["stale"] is False
+    assert btc["change"] == 1.25
+    assert btc["change_source"] == "rest_ticker_24h"
+    assert btc["quote_volume_24h"] == 123456789.0
 
 
 def test_state_prefers_ws_ticker_price_over_cached_major_snapshot(monkeypatch):
@@ -4156,6 +4199,46 @@ def test_learning_data_audit_degrades_when_radar_summary_query_fails(monkeypatch
     assert "radar_snapshot_audit_unavailable" in report["reasons"]
     assert report["radar_snapshots"]["ok"] is False
     assert report["radar_snapshots"]["error"] == "DatabaseError:database disk image is malformed"
+
+
+def test_learning_data_audit_degrades_when_learning_source_queries_fail(monkeypatch):
+    learning_data_audit.clear_cache()
+
+    def fail_query(*args, **kwargs):
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(settings, "replay_enabled", True)
+    monkeypatch.setattr(replay_memory, "samples", fail_query)
+    monkeypatch.setattr(trade_memory, "samples", fail_query)
+    monkeypatch.setattr(db, "list_closed", fail_query)
+    monkeypatch.setattr(
+        learning_data_audit,
+        "_radar_summary",
+        lambda: {"ok": True, "span_days": 0.0, "rows": 0, "distinct_scans": 0, "distinct_symbols": 0},
+    )
+    monkeypatch.setattr(
+        learning_data_audit,
+        "_market_backtest_summary",
+        lambda: {
+            "available": False,
+            "quality_passed": False,
+            "missing_reasons": ["market_backtest_report_missing"],
+        },
+    )
+
+    report = learning_data_audit.summary(force=True)
+
+    assert report["production_grade"] is False
+    assert "replay_audit_unavailable" in report["reasons"]
+    assert "closed_trade_audit_unavailable" in report["reasons"]
+    assert report["sources"]["replay_samples"] == 0
+    assert report["sources"]["real_closed_samples_with_radar"] == 0
+    assert report["sources"]["raw_closed_trades_total"] == 0
+    assert report["source_errors"] == {
+        "closed_samples": "DatabaseError:database disk image is malformed",
+        "raw_closed_rows": "DatabaseError:database disk image is malformed",
+        "replay_samples": "DatabaseError:database disk image is malformed",
+    }
 
 
 def test_learning_data_audit_exposes_closed_sample_provider_breakdown(monkeypatch):
@@ -8412,6 +8495,61 @@ def test_strict_geometry_candidates_require_review_material_improvements(monkeyp
     assert [candidate.symbol for candidate in candidates] == [clean.symbol]
 
 
+def test_strict_geometry_candidates_require_current_microstructure_support(monkeypatch):
+    flow_bad = high_quality_item(symbol="FLOWBADGEOMETRYUSDT", side="LONG", price=100)
+    ua_neutral = high_quality_item(symbol="UANEUTRALGEOMETRYUSDT", side="LONG", price=100)
+    book_bad = high_quality_item(symbol="BOOKBADGEOMETRYUSDT", side="LONG", price=100)
+    clean = high_quality_item(symbol="CLEANGEOMETRYUSDT", side="LONG", price=100)
+    for item in [flow_bad, ua_neutral, book_bad, clean]:
+        item.taker_buy_ratio = 0.60
+        item.taker_sell_ratio = 0.40
+        item.depth_imbalance = 0.12
+        item.score_features = {
+            "universal_anomaly_model": {
+                "direction": "LONG",
+                "confidence": 62.0,
+                "probabilities": {"LONG": 0.62, "SHORT": 0.08, "NEUTRAL": 0.30},
+            }
+        }
+    ua_neutral.score_features = {
+        "universal_anomaly_model": {
+            "direction": "NEUTRAL",
+            "confidence": 44.0,
+            "probabilities": {"LONG": 0.44, "SHORT": 0.14, "NEUTRAL": 0.42},
+        }
+    }
+    book_bad.taker_buy_ratio = 0.51
+    book_bad.taker_sell_ratio = 0.49
+    book_bad.depth_imbalance = -0.12
+
+    def fake_check(candidate):
+        risks = ["flow_negative"] if candidate.symbol == flow_bad.symbol else []
+        feature = SimpleNamespace(
+            feature_score=100.0,
+            estimated_win_rate=0.41,
+            selection_score=82.0,
+            reasons=["historical_negative_estimate_capped"],
+            failure_risks=risks,
+        )
+        return False, feature, ["cyqnt_win_rate_low"]
+
+    monkeypatch.setattr(radar_engine, "_production_candidate_check", fake_check)
+    monkeypatch.setattr(
+        ai_strategy_feedback,
+        "evaluate_candidate",
+        lambda candidate: {
+            "quality_bias": "NEUTRAL",
+            "avoid_repeating": [],
+            "review_lessons": [],
+            "candidate_learning_delta": {"material_improvements_vs_losses": [], "overlaps_with_losing_risks": []},
+        },
+    )
+
+    candidates = production_acceptance_runner._strict_geometry_candidates([flow_bad, ua_neutral, book_bad, clean])
+
+    assert [candidate.symbol for candidate in candidates] == [clean.symbol]
+
+
 def test_production_acceptance_shadow_reviews_when_no_strict_candidate(monkeypatch):
     review_item = high_quality_item(symbol="REVIEWUSDT", side="SHORT", price=100)
     review_item.fund_confirm_count = 2
@@ -10221,6 +10359,24 @@ def test_replay_memory_samples_return_newest_simulated_outcomes(monkeypatch):
     samples = replay_memory.samples(limit=3)
 
     assert [sample["close_time"] for sample in samples] == [8, 7, 6]
+
+
+def test_replay_memory_samples_degrades_when_snapshot_query_fails(monkeypatch):
+    replay_memory._cache_until = 0
+    replay_memory._cache_limit = 0
+    replay_memory._sample_cache = []
+    replay_memory.last_error = ""
+
+    def fail_load(sample_limit):
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(replay_memory, "_load_snapshots", fail_load)
+
+    samples = replay_memory.samples(limit=3)
+
+    assert samples == []
+    assert replay_memory.last_error == "DatabaseError:database disk image is malformed"
+
 
 def test_radar_weight_calibrator_adjusts_validated_feature_weights(monkeypatch):
     samples = []
