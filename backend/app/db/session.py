@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -16,8 +16,24 @@ def _default_database_url() -> str:
 
 def build_engine(database_url: str | None = None) -> Engine:
     url = database_url or _default_database_url()
-    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-    return create_engine(url, connect_args=connect_args, future=True)
+    is_sqlite = url.startswith("sqlite")
+    connect_args = {"check_same_thread": False, "timeout": 30.0} if is_sqlite else {}
+    built = create_engine(url, connect_args=connect_args, future=True)
+    if is_sqlite:
+        _configure_sqlite_engine(built)
+    return built
+
+
+def _configure_sqlite_engine(target: Engine) -> None:
+    @event.listens_for(target, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA busy_timeout=30000")
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA foreign_keys=ON")
+        finally:
+            cursor.close()
 
 
 engine = build_engine()

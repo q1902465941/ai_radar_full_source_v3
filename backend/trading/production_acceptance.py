@@ -152,6 +152,10 @@ class ProductionAcceptanceRunner:
         manage_seconds = max(0, min(int(manage_seconds or 0), 900))
         stages: list[dict[str, Any]] = []
         started_ms = now_ms()
+        preflight_blocker = ""
+
+        def blocked_result(fallback: str) -> dict[str, str]:
+            return {"blocked": preflight_blocker or fallback}
 
         if mode not in PRODUCTION_ACCEPTANCE_MODES:
             report = self._report(
@@ -165,6 +169,8 @@ class ProductionAcceptanceRunner:
 
         safety_ok, safety_reason = self._mode_safety(mode, confirm_real_order)
         stages.append(self._stage("production_safety", safety_ok, self._safety_evidence(mode, safety_reason)))
+        if not safety_ok:
+            preflight_blocker = safety_reason
         if not safety_ok and mode != "preflight":
             report = self._report(mode=mode, started_ms=started_ms, stages=stages, result={"blocked": safety_reason})
             self._store(report)
@@ -173,6 +179,8 @@ class ProductionAcceptanceRunner:
         data_quality = learning_data_audit.summary(force=True)
         data_quality_ok = bool(data_quality.get("production_grade"))
         stages.append(self._stage("learning_data_audit", data_quality_ok, data_quality))
+        if not data_quality_ok and not preflight_blocker:
+            preflight_blocker = "learning_data_not_production_grade"
         if not data_quality_ok and mode != "preflight":
             report = self._report(
                 mode=mode,
@@ -202,12 +210,12 @@ class ProductionAcceptanceRunner:
             )
         except asyncio.TimeoutError:
             stages.append(self._stage("scan", False, {"error": "radar_scan_timeout", "scan_status": radar_engine.scan_status()}))
-            report = self._report(mode=mode, started_ms=started_ms, stages=stages, result={"blocked": "scan_failed"})
+            report = self._report(mode=mode, started_ms=started_ms, stages=stages, result=blocked_result("scan_failed"))
             self._store(report)
             return report
         except Exception as exc:
             stages.append(self._stage("scan", False, {"error": _err(exc), "scan_status": radar_engine.scan_status()}))
-            report = self._report(mode=mode, started_ms=started_ms, stages=stages, result={"blocked": "scan_failed"})
+            report = self._report(mode=mode, started_ms=started_ms, stages=stages, result=blocked_result("scan_failed"))
             self._store(report)
             return report
 
@@ -373,7 +381,7 @@ class ProductionAcceptanceRunner:
                         },
                     )
                 )
-            report = self._report(mode=mode, started_ms=started_ms, stages=stages, result={"blocked": "no_strict_production_candidates"})
+            report = self._report(mode=mode, started_ms=started_ms, stages=stages, result=blocked_result("no_strict_production_candidates"))
             self._store(report)
             return report
 
@@ -484,7 +492,7 @@ class ProductionAcceptanceRunner:
             )
         )
         if not plan_ok or not ai_generated or not opens:
-            report = self._report(mode=mode, started_ms=started_ms, stages=stages, result={"blocked": "ai_strategy_not_open"})
+            report = self._report(mode=mode, started_ms=started_ms, stages=stages, result=blocked_result("ai_strategy_not_open"))
             self._store(report)
             return report
 
@@ -507,7 +515,7 @@ class ProductionAcceptanceRunner:
             )
         )
         if not risk_ok:
-            report = self._report(mode=mode, started_ms=started_ms, stages=stages, result={"blocked": "risk_model_not_open"})
+            report = self._report(mode=mode, started_ms=started_ms, stages=stages, result=blocked_result("risk_model_not_open"))
             self._store(report)
             return report
 
@@ -530,7 +538,7 @@ class ProductionAcceptanceRunner:
                 mode=mode,
                 started_ms=started_ms,
                 stages=stages,
-                result={"blocked": "preflight_does_not_submit_orders"},
+                result=blocked_result("preflight_does_not_submit_orders"),
             )
             self._store(report)
             return report

@@ -85,6 +85,7 @@ class LearningDataAudit:
         replay_ratio = replay_count / max(1, combined_count)
         min_closed = max(30, int(settings.trade_attribution_min_samples) * 3)
         min_radar_days = 14.0
+        max_replay_ratio = 0.80
         market_backtest_passed = bool(market_backtest.get("quality_passed"))
         market_span_days = float(market_backtest.get("span_days") or 0.0)
         evidence_span_days = max(float(radar.get("span_days") or 0.0), market_span_days)
@@ -94,9 +95,9 @@ class LearningDataAudit:
             reasons.append("replay_audit_unavailable")
         if "closed_samples" in source_errors or "raw_closed_rows" in source_errors:
             reasons.append("closed_trade_audit_unavailable")
-        if closed_count < min_closed and not market_backtest_passed:
+        if closed_count < min_closed:
             reasons.append("real_closed_samples_low")
-        if replay_count > 0 and replay_ratio >= 0.80 and not market_backtest_passed:
+        if replay_count > 0 and replay_ratio >= max_replay_ratio:
             reasons.append("replay_dominated")
         if not market_backtest["available"]:
             reasons.append("market_backtest_missing")
@@ -126,7 +127,7 @@ class LearningDataAudit:
                 "real_closed_samples": min_closed,
                 "radar_history_days": min_radar_days,
                 "requires_market_backtest": True,
-                "max_replay_ratio_for_production": 0.80,
+                "max_replay_ratio_for_production": max_replay_ratio,
                 "market_backtest_trades": int(settings.evolve_min_backtest_trades),
                 "market_backtest_holdout_trades": int(settings.evolve_min_holdout_trades),
                 "market_backtest_win_rate": float(settings.evolve_min_win_rate),
@@ -157,7 +158,8 @@ class LearningDataAudit:
             "source_errors": source_errors,
             "instruction": (
                 "LOW/MEDIUM trust learning data may guide review and shadow validation, "
-                "but must not be presented as production-grade backtest evidence."
+                "but must not be presented as production-grade evidence. A passing market backtest "
+                "does not replace real closed paper/shadow samples with radar context."
             ),
         }
         self._cache = report

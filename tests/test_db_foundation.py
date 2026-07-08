@@ -1,5 +1,5 @@
 import pytest
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
@@ -34,6 +34,18 @@ def test_database_foundation_creates_task_tables(tmp_path):
         "direction",
         "raw_json",
     } <= candidate_columns
+
+
+def test_sqlite_engine_waits_for_busy_writers_and_uses_wal(tmp_path):
+    db_path = tmp_path / "foundation.db"
+    engine = build_engine(f"sqlite:///{db_path}")
+
+    with engine.connect() as connection:
+        busy_timeout = connection.execute(text("PRAGMA busy_timeout")).scalar_one()
+        journal_mode = connection.execute(text("PRAGMA journal_mode")).scalar_one()
+
+    assert busy_timeout >= 30000
+    assert str(journal_mode).lower() == "wal"
 
 
 def test_init_db_retries_when_sqlite_create_all_races(monkeypatch):

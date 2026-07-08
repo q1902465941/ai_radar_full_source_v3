@@ -364,6 +364,11 @@ def paper_graduation_progress(data_quality: dict[str, Any]) -> dict[str, Any]:
         next_requirement = "Production-grade learning evidence is available."
     elif market_available and not market_passed:
         next_requirement = "Repair or regenerate the market backtest until quality gates pass."
+    elif missing_real_closed > 0 and market_passed:
+        next_requirement = (
+            f"Collect {missing_real_closed} more real closed paper/shadow samples with radar context; "
+            "the market backtest is already passing but cannot replace closed live/paper learning samples."
+        )
     elif missing_real_closed > 0:
         next_requirement = (
             f"Collect {missing_real_closed} more real closed paper/shadow samples with radar context "

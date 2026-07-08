@@ -4433,6 +4433,45 @@ def test_learning_data_audit_rejects_market_backtest_before_learning_reset(monke
     assert "market_backtest_before_learning_reset" in report["market_backtest"]["quality_blockers"]
 
 
+def test_learning_data_audit_requires_real_closed_samples_even_with_passing_market_backtest(monkeypatch):
+    learning_data_audit.clear_cache()
+    monkeypatch.setattr(settings, "replay_enabled", True)
+    monkeypatch.setattr(replay_memory, "samples", lambda limit=None: [sample_trade(close_time=idx + 1) for idx in range(60)])
+    monkeypatch.setattr(trade_memory, "samples", lambda limit=10000, require_radar=True: [sample_trade(close_time=1000 + idx) for idx in range(7)])
+    monkeypatch.setattr(
+        db,
+        "list_closed",
+        lambda limit=100000: [{"close_reason": "TP2"} for _ in range(7)],
+    )
+    monkeypatch.setattr(db, "get_kv", lambda key, default=None: default)
+    monkeypatch.setattr(
+        learning_data_audit,
+        "_radar_summary",
+        lambda: {"ok": True, "span_days": 14.0, "rows": 1000, "distinct_scans": 300, "distinct_symbols": 30},
+    )
+    monkeypatch.setattr(
+        learning_data_audit,
+        "_market_backtest_summary",
+        lambda: {
+            "available": True,
+            "quality_passed": True,
+            "quality_blockers": [],
+            "generated_at_ms": 3000,
+            "span_days": 14.0,
+            "metrics": {"trades": 38, "win_rate": 0.68, "profit_factor": 1.8, "net_pnl_r": 11.4},
+            "holdout_metrics": {"trades": 12, "win_rate": 0.66, "profit_factor": 1.4, "net_pnl_r": 2.0},
+        },
+    )
+
+    report = learning_data_audit.summary(force=True)
+
+    assert report["production_grade"] is False
+    assert report["trust_level"] == "MEDIUM"
+    assert "real_closed_samples_low" in report["reasons"]
+    assert "replay_dominated" in report["reasons"]
+    assert report["market_backtest"]["quality_passed"] is True
+
+
 def test_learned_risk_guard_blocks_repeated_loss_factor(monkeypatch):
     monkeypatch.setattr(settings, "trade_attribution_enabled", True)
     monkeypatch.setattr(settings, "trade_learning_guard_enabled", True)
@@ -6346,6 +6385,36 @@ def test_system_readiness_exposes_paper_graduation_progress(monkeypatch):
     assert progress["next_requirement"] == "Collect 29 more real closed paper/shadow samples with radar context or provide a passing market backtest."
 
 
+def test_paper_graduation_progress_does_not_treat_backtest_as_real_sample_substitute():
+    import backend.system_readiness as system_readiness
+
+    progress = system_readiness.paper_graduation_progress(
+        {
+            "production_grade": False,
+            "trust_level": "MEDIUM",
+            "reasons": ["real_closed_samples_low", "replay_dominated"],
+            "minimums": {"real_closed_samples": 30, "radar_history_days": 14.0},
+            "sources": {
+                "combined_samples": 67,
+                "replay_samples": 60,
+                "real_closed_samples_with_radar": 7,
+                "codex_real_closed_samples_with_radar": 2,
+                "real_closed_samples_by_provider": {"codex_cli": 2, "rule": 5},
+                "replay_ratio": 0.8955,
+            },
+            "radar_snapshots": {"span_days": 14.0},
+            "market_backtest": {"available": True, "quality_passed": True},
+        }
+    )
+
+    assert progress["market_backtest_quality_passed"] is True
+    assert progress["missing_real_closed_samples"] == 23
+    assert progress["next_requirement"] == (
+        "Collect 23 more real closed paper/shadow samples with radar context; "
+        "the market backtest is already passing but cannot replace closed live/paper learning samples."
+    )
+
+
 def test_system_readiness_database_probe_counts_tables(tmp_path):
     import backend.system_readiness as system_readiness
 
@@ -8090,6 +8159,7 @@ def test_production_acceptance_rejects_open_decision_when_execution_mode_is_pape
     monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([item], "strict"))
     monkeypatch.setattr(ai_service, "generate_strategy", fake_generate)
     monkeypatch.setattr(autotrader, "_account_context", fake_account_context)
+    monkeypatch.setattr(learning_data_audit, "summary", lambda force=False, limit=None: {"production_grade": True, "trust_level": "PRODUCTION", "reasons": []})
     patch_ok_production_strategy_geometry(monkeypatch)
     monkeypatch.setattr(
         auto_trading_risk_model,
@@ -9114,6 +9184,7 @@ def test_production_acceptance_shadow_reviews_when_no_strict_candidate(monkeypat
     monkeypatch.setattr(radar_engine, "select_ai_review_candidates", lambda items: [review_item])
     monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([review_item], "strict_review"))
     monkeypatch.setattr(ai_service, "generate_strategy", fake_generate)
+    monkeypatch.setattr(learning_data_audit, "summary", lambda force=False, limit=None: {"production_grade": True, "trust_level": "PRODUCTION", "reasons": []})
     patch_ok_production_strategy_geometry(monkeypatch)
 
     out = __import__("asyncio").run(production_acceptance_runner.run(mode="preflight", manage_seconds=0))
@@ -9124,6 +9195,38 @@ def test_production_acceptance_shadow_reviews_when_no_strict_candidate(monkeypat
     assert stages["shadow_strategy_plan"]["ok"] is True
     assert stages["shadow_strategy_plan"]["evidence"]["not_counted_as_production"] is True
     assert stages["shadow_strategy_plan"]["evidence"]["action"] == "OPEN_SHORT"
+
+
+def test_production_acceptance_preflight_prioritizes_learning_data_blocker(monkeypatch):
+    async def fake_scan(force_refresh=False):
+        radar_engine.top50 = []
+        radar_engine.last_scan_id = "scan_learning_blocked"
+        radar_engine.last_scan_time = "12:03:00"
+        return radar_engine.top50
+
+    monkeypatch.setattr("backend.trading.production_acceptance.PRODUCTION_ACCEPTANCE_SCAN_RETRY_SECONDS", 0)
+    monkeypatch.setattr(
+        learning_data_audit,
+        "summary",
+        lambda force=False, limit=None: {
+            "production_grade": False,
+            "trust_level": "MEDIUM",
+            "reasons": ["real_closed_samples_low", "replay_dominated"],
+        },
+    )
+    monkeypatch.setattr(radar_engine, "scan", fake_scan)
+    monkeypatch.setattr(radar_engine, "select_ai_candidates", lambda items: [])
+    monkeypatch.setattr(radar_engine, "select_ai_review_candidates", lambda items: [])
+    monkeypatch.setattr(autotrader, "_candidate_batch", lambda performance: ([], "paper_top"))
+
+    out = asyncio.run(production_acceptance_runner.run(mode="preflight", manage_seconds=0))
+    stages = {stage["name"]: stage for stage in out["stages"]}
+
+    assert out["result"]["blocked"] == "learning_data_not_production_grade"
+    assert stages["learning_data_audit"]["ok"] is False
+    assert stages["scan"]["ok"] is False
+    assert stages["candidate_selection"]["ok"] is False
+
 
 def test_live_readiness_shows_paper_is_not_terminal_while_recovery_blocks_live(monkeypatch):
     monkeypatch.setattr(settings, "paper_probe_enabled", True)
